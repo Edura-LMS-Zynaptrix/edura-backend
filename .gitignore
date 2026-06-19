@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# Database
+*.db
+*.sqlite
+
+# Alembic cache
+alembic/__pycache__/
