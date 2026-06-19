@@ -4,63 +4,75 @@ services:
     build:
       context: .
       dockerfile: auth_service/Dockerfile
-
+    ports:
+      - "8001:8001"
 
   user_service:
     build:
       context: .
       dockerfile: user_service/Dockerfile
-
+    ports:
+      - "8002:8002"
 
   course_service:
     build:
       context: .
       dockerfile: course_service/Dockerfile
-
+    ports:
+      - "8003:8003"
 
   content_service:
     build:
       context: .
       dockerfile: content_service/Dockerfile
-
+    ports:
+      - "8004:8004"
 
   enrollment_service:
     build:
       context: .
       dockerfile: enrollment_service/Dockerfile
-
+    ports:
+      - "8005:8005"
 
   payment_service:
     build:
       context: .
       dockerfile: payment_service/Dockerfile
-
+    ports:
+      - "8006:8006"
 
   assessment_service:
     build:
       context: .
       dockerfile: assessment_service/Dockerfile
-
+    ports:
+      - "8007:8007"
 
   progress_service:
     build:
       context: .
       dockerfile: progress_service/Dockerfile
-
+    ports:
+      - "8008:8008"
 
   notification_service:
     build:
       context: .
       dockerfile: notification_service/Dockerfile
-
+    ports:
+      - "8009:8009"
 
   analytics_service:
     build:
       context: .
       dockerfile: analytics_service/Dockerfile
-
+    ports:
+      - "8010:8010"
 
   admin_service:
     build:
       context: .
       dockerfile: admin_service/Dockerfile
+    ports:
+      - "8011:8011"
