@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+
+  auth_service:
+    build: ./auth_service
+
+  user_service:
+    build: ./user_service
+
+  course_service:
+    build: ./course_service
+
+  content_service:
+    build: ./content_service
+
+  enrollment_service:
+    build: ./enrollment_service
+
+  payment_service:
+    build: ./payment_service
+
+  assessment_service:
+    build: ./assessment_service
+
+  progress_service:
+    build: ./progress_service
+
+  notification_service:
+    build: ./notification_service
+
+  analytics_service:
+    build: ./analytics_service
+
+  admin_service:
+    build: ./admin_service
