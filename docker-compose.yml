@@ -1,36 +1,66 @@
-version: "3.9"
-
 services:
 
   auth_service:
-    build: ./auth_service
+    build:
+      context: .
+      dockerfile: auth_service/Dockerfile
+
 
   user_service:
-    build: ./user_service
+    build:
+      context: .
+      dockerfile: user_service/Dockerfile
+
 
   course_service:
-    build: ./course_service
+    build:
+      context: .
+      dockerfile: course_service/Dockerfile
+
 
   content_service:
-    build: ./content_service
+    build:
+      context: .
+      dockerfile: content_service/Dockerfile
+
 
   enrollment_service:
-    build: ./enrollment_service
+    build:
+      context: .
+      dockerfile: enrollment_service/Dockerfile
+
 
   payment_service:
-    build: ./payment_service
+    build:
+      context: .
+      dockerfile: payment_service/Dockerfile
+
 
   assessment_service:
-    build: ./assessment_service
+    build:
+      context: .
+      dockerfile: assessment_service/Dockerfile
+
 
   progress_service:
-    build: ./progress_service
+    build:
+      context: .
+      dockerfile: progress_service/Dockerfile
+
 
   notification_service:
-    build: ./notification_service
+    build:
+      context: .
+      dockerfile: notification_service/Dockerfile
+
 
   analytics_service:
-    build: ./analytics_service
+    build:
+      context: .
+      dockerfile: analytics_service/Dockerfile
+
 
   admin_service:
-    build: ./admin_service
+    build:
+      context: .
+      dockerfile: admin_service/Dockerfile
