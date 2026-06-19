@@ -1,11 +1,54 @@
 services:
 
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: edura
+      POSTGRES_PASSWORD: edura
+      POSTGRES_DB: edura
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edura"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+
   auth_service:
     build:
       context: .
       dockerfile: auth_service/Dockerfile
     ports:
       - "8001:8001"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${AUTH_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   user_service:
     build:
@@ -13,6 +56,18 @@ services:
       dockerfile: user_service/Dockerfile
     ports:
       - "8002:8002"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${USER_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   course_service:
     build:
@@ -20,6 +75,18 @@ services:
       dockerfile: course_service/Dockerfile
     ports:
       - "8003:8003"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${COURSE_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   content_service:
     build:
@@ -27,6 +94,18 @@ services:
       dockerfile: content_service/Dockerfile
     ports:
       - "8004:8004"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${CONTENT_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   enrollment_service:
     build:
@@ -34,6 +113,18 @@ services:
       dockerfile: enrollment_service/Dockerfile
     ports:
       - "8005:8005"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${ENROLLMENT_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   payment_service:
     build:
@@ -41,6 +132,18 @@ services:
       dockerfile: payment_service/Dockerfile
     ports:
       - "8006:8006"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${PAYMENT_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   assessment_service:
     build:
@@ -48,6 +151,18 @@ services:
       dockerfile: assessment_service/Dockerfile
     ports:
       - "8007:8007"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${ASSESSMENT_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   progress_service:
     build:
@@ -55,6 +170,18 @@ services:
       dockerfile: progress_service/Dockerfile
     ports:
       - "8008:8008"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${PROGRESS_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   notification_service:
     build:
@@ -62,6 +189,18 @@ services:
       dockerfile: notification_service/Dockerfile
     ports:
       - "8009:8009"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${NOTIFICATION_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   analytics_service:
     build:
@@ -69,6 +208,18 @@ services:
       dockerfile: analytics_service/Dockerfile
     ports:
       - "8010:8010"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${ANALYTICS_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   admin_service:
     build:
@@ -76,3 +227,15 @@ services:
       dockerfile: admin_service/Dockerfile
     ports:
       - "8011:8011"
+    volumes:
+      - ./:/app
+    environment:
+      DATABASE_URL: ${ADMIN_DATABASE_URL:-postgresql://edura:edura@postgres:5432/edura}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SECRET_KEY: ${SECRET_KEY:-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
