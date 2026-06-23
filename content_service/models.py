@@ -1,13 +1,16 @@
-from database import Base
-from sqlalchemy import Column, Integer, String
+"""
+content_service/models.py
+SQLAlchemy 2.0 ORM models for the Content Service.
 
-class Content(Base):
-    __tablename__ = "Content"
+Per the SDS issue specification, the content_service has NO owned database tables.
+It operates on Cloudinary/YouTube URLs stored in course_service.lessons.
+This file is intentionally minimal — only the Base import is provided
+so Alembic does not produce an empty migration error.
 
-    id = Column(Integer, primary_key=True, index=True)
-    course_id = Column(Integer, index=True, nullable=False)
-    title = Column(String, nullable=False)
-    content_type = Column(String, nullable=False)
-    url = Column(String, nullable=True)
-    body = Column(String, nullable=True)
-    order = Column(Integer, default=0)
+If a future requirement adds content metadata (e.g. processing job tracking),
+add models below.
+"""
+from database import Base  # noqa: F401 — imported so Alembic detects this service's Base
+
+# No tables owned by content_service.
+# All media URL references live in course_service.lessons (video_url).
