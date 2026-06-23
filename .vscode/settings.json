@@ -1,0 +1,19 @@
+{
+  "python.analysis.extraPaths": [
+    "./auth_service",
+    "./user_service",
+    "./course_service",
+    "./content_service",
+    "./enrollment_service",
+    "./payment_service",
+    "./assessment_service",
+    "./progress_service",
+    "./notification_service",
+    "./analytics_service",
+    "./admin_service",
+    "./shared"
+  ],
+  "python.analysis.ignore": [
+    "**/alembic/**"
+  ]
+}

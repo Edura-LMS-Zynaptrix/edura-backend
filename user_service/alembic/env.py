@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 from logging.config import fileConfig
 
@@ -27,6 +27,7 @@ sys.path.insert(0, os.getcwd())
 # for 'autogenerate' support
 import models
 target_metadata = models.Base.metadata
+
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
