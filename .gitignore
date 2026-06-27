@@ -48,6 +48,8 @@ coverage.xml
 *.cover
 *.py,cover
 .flatpak-builder/
+.coverage
+.coverage.*
 
 # Translations
 *.mo
