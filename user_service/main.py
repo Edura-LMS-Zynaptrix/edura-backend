@@ -1,15 +1,13 @@
 from fastapi import FastAPI
+
 from router import router
 
-app = FastAPI(
-    title="User Service"
-)
+app = FastAPI(title="User Service")
 
-app.include_router(router)
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "service": "user_service"
-    }
+    return {"status": "ok", "service": "user_service"}
+
+
+app.include_router(router, tags=["users"])
