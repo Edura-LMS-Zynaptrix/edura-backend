@@ -10,3 +10,10 @@ class UserResponse(UserBase):
         "from_attributes": True
     }
 
+class AdminLogin(BaseModel):
+    username: str
+    password: str
+
+class TeacherLogin(BaseModel):
+    username: str
+    password: str

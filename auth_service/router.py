@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from shared.auth import require_role
+from database import get_db
 
 router = APIRouter()
 
