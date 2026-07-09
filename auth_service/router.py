@@ -8,3 +8,9 @@ async def admin_only(
     _: None = Depends(require_role(["admin"]))
 ):
     return {"message": "Welcome Admin"}
+
+@router.post("/admin")
+async def admin_login():
+    return {
+        "login success"
+    }
