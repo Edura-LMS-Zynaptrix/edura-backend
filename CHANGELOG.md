@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `content_service`: media delivery endpoints (DDP-#19)
+  - `POST /signed-url` — Cloudinary signed URL (1-hour expiry); students must be enrolled, teachers/admins unrestricted
+  - `GET /lessons/{lesson_id}/stream` — YouTube embed parameters (youtube-nocookie.com, rel=0, modestbranding=1); enrollment enforced for students
+  - `POST /upload` — file upload validation: size ≤ 25 MB, MIME whitelist (pdf/png/jpeg), python-magic byte-signature verification
+- `content_service/cloudinary_utils.py`: `get_signed_url(public_id)` wrapper using `cloudinary.utils.cloudinary_url` with `sign_url=True`
+- `content_service/enrollment_client.py`: async httpx client — calls `enrollment_service /enrollments` and checks `status == "active"`
+- `content_service/tests/test_content.py`: 20 tests covering all ACs (router 100% coverage)
 - `course_service`: full Course → Module → Lesson REST API (DDP-#17)
   - `POST /` — teacher creates course (status: DRAFT)
   - `GET /` — list courses; students see only PUBLISHED
