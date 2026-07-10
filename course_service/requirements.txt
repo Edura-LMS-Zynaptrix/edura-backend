@@ -7,3 +7,6 @@ pydantic==2.*
 python-jose
 redis
 pika
+pytest>=7.4
+httpx>=0.25
+pytest-cov>=4.1
