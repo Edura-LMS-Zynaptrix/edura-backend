@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `course_service`: full Course → Module → Lesson REST API (DDP-#17)
+  - `POST /` — teacher creates course (status: DRAFT)
+  - `GET /` — list courses; students see only PUBLISHED
+  - `GET /{course_id}` — get course detail
+  - `PUT /{course_id}` — update course; publishing requires ≥1 module with ≥1 lesson
+  - `DELETE /{course_id}` — teacher or admin deletes own course
+  - `POST /{course_id}/modules` — create module
+  - `GET /{course_id}/modules` — list modules ordered by position
+  - `POST /{course_id}/modules/{module_id}/lessons` — create lesson (youtube_video_id + cloudinary_asset_url)
+  - `GET /{course_id}/modules/{module_id}/lessons` — list lessons
+- `course_service/events.py`: `publish_course_published()` — publishes `course.published` event to RabbitMQ exchange `edura.events`
+- `course_service/router.py`: `assert_course_owner()` helper — teachers can only mutate their own courses; admin bypasses check
+- `course_service/alembic/versions/a1b2c3d4e5f6`: migration adding `status` ENUM (DRAFT/PUBLISHED/ARCHIVED) to courses and `youtube_video_id`, `cloudinary_asset_url` to lessons
+- `course_service/tests/test_courses.py`: 17 tests covering all ACs (91% coverage)
 - `shared/auth.py`: `require_role(roles)` dependency factory — validates Bearer JWT (HS256),
   enforces role membership, raises structured 401/403 errors; importable by all 11 services
 - `user_service`: full REST API for user profile management
