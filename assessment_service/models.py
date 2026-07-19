@@ -8,26 +8,26 @@ Matches ER diagram:
 - exam entity: timed assessment
 - quiz_habits / participate: tracked via Submission and ViolationLog
 """
+
 import enum
 
+from database import Base  # shared Base from database.py
 from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
-
-from database import Base  # shared Base from database.py
-
 
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
 
+
 class AssessmentType(str, enum.Enum):
-    quiz = "quiz"       # Short practice quiz (matches ER diagram: quiz entity)
-    exam = "exam"       # Full timed exam  (matches ER diagram: exam entity)
+    quiz = "quiz"  # Short practice quiz (matches ER diagram: quiz entity)
+    exam = "exam"  # Full timed exam  (matches ER diagram: exam entity)
 
 
 class QuestionType(str, enum.Enum):
-    mcq = "mcq"                     # Multiple-choice question
+    mcq = "mcq"  # Multiple-choice question
     true_false = "true_false"
     short_answer = "short_answer"
 
@@ -50,12 +50,14 @@ class ViolationType(str, enum.Enum):
 # Models
 # ---------------------------------------------------------------------------
 
+
 class Assessment(Base):
     """
     Represents a quiz or exam for a course.
     Matches ER diagram: quiz entity (ID, type, password) and exam entity.
     quiz_password allows teacher to restrict access (matches ER: password attribute on quiz).
     """
+
     __tablename__ = "assessments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -64,7 +66,9 @@ class Assessment(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     assessment_type: Mapped[AssessmentType] = mapped_column(
-        Enum(AssessmentType, name="assessmenttype"), nullable=False, default=AssessmentType.quiz
+        Enum(AssessmentType, name="assessmenttype"),
+        nullable=False,
+        default=AssessmentType.quiz,
     )
     quiz_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     time_limit_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -75,12 +79,13 @@ class Assessment(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
-    __table_args__ = (
-        Index("ix_assessments_course_id", "course_id"),
-    )
+    __table_args__ = (Index("ix_assessments_course_id", "course_id"),)
 
 
 class Question(Base):
@@ -89,13 +94,16 @@ class Question(Base):
     options_json stores MCQ choices as a JSON string (e.g. '["A","B","C","D"]').
     correct_answer stores the correct answer text or index.
     """
+
     __tablename__ = "questions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     assessment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
     question_type: Mapped[QuestionType] = mapped_column(
-        Enum(QuestionType, name="questiontype"), nullable=False, default=QuestionType.mcq
+        Enum(QuestionType, name="questiontype"),
+        nullable=False,
+        default=QuestionType.mcq,
     )
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
     correct_answer: Mapped[str] = mapped_column(Text, nullable=False)
@@ -105,12 +113,13 @@ class Question(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
-    __table_args__ = (
-        Index("ix_questions_assessment_id", "assessment_id"),
-    )
+    __table_args__ = (Index("ix_questions_assessment_id", "assessment_id"),)
 
 
 class Submission(Base):
@@ -119,6 +128,7 @@ class Submission(Base):
     Matches ER diagram: participate / quiz_habits entity — tracks student engagement.
     answers_json stores student answers as a JSON string keyed by question_id.
     """
+
     __tablename__ = "submissions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -134,12 +144,17 @@ class Submission(Base):
     started_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    submitted_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     __table_args__ = (
@@ -154,6 +169,7 @@ class ViolationLog(Base):
     Anti-cheating event log for a student's exam submission.
     Records tab switching, copy-paste, camera detection events.
     """
+
     __tablename__ = "violation_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -170,7 +186,10 @@ class ViolationLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     __table_args__ = (

@@ -5,22 +5,22 @@ Entities: Course, Module, Lesson
 Matches ER diagram: course entity (desc_name, instructor/teacher relationship),
 module structure, and lesson hierarchy.
 """
+
 import enum
 
+from database import Base  # shared Base from database.py
 from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
-
-from database import Base  # shared Base from database.py
-
 
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
 
+
 class CourseType(str, enum.Enum):
-    video = "video"       # Video course (streaming)
-    exam = "exam"         # Exam / assessment course
+    video = "video"  # Video course (streaming)
+    exam = "exam"  # Exam / assessment course
 
 
 class LessonType(str, enum.Enum):
@@ -33,11 +33,13 @@ class LessonType(str, enum.Enum):
 # Models
 # ---------------------------------------------------------------------------
 
+
 class Course(Base):
     """
     Represents a course created by a teacher.
     Matches ER diagram: course entity with desc_name, linked to teacher via instructor_id.
     """
+
     __tablename__ = "courses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -54,12 +56,13 @@ class Course(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
-    __table_args__ = (
-        Index("ix_courses_instructor_id", "instructor_id"),
-    )
+    __table_args__ = (Index("ix_courses_instructor_id", "instructor_id"),)
 
 
 class Module(Base):
@@ -67,6 +70,7 @@ class Module(Base):
     A named section/chapter within a course.
     Ordered by position for display.
     """
+
     __tablename__ = "modules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -78,12 +82,13 @@ class Module(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
-    __table_args__ = (
-        Index("ix_modules_course_id", "course_id"),
-    )
+    __table_args__ = (Index("ix_modules_course_id", "course_id"),)
 
 
 class Lesson(Base):
@@ -92,6 +97,7 @@ class Lesson(Base):
     Matches ER diagram: lesson/video content within a course.
     duration_seconds: length of the video/content in seconds.
     """
+
     __tablename__ = "lessons"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -104,12 +110,17 @@ class Lesson(Base):
     video_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    is_free_preview: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_free_preview: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     __table_args__ = (

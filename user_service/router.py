@@ -1,7 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-
 from database import get_db
+from fastapi import APIRouter, Depends, HTTPException, Query
 from models import ProfileRole, UserProfile
 from schemas import (
     PaginatedUsersResponse,
@@ -9,6 +7,8 @@ from schemas import (
     UserProfileResponse,
     UserProfileUpdate,
 )
+from sqlalchemy.orm import Session
+
 from shared.auth import require_role
 
 router = APIRouter()

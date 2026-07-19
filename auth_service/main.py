@@ -1,15 +1,11 @@
 from fastapi import FastAPI
 from router import router
 
-app = FastAPI(
-    title="Auth Service"
-)
+app = FastAPI(title="Auth Service")
 
 app.include_router(router)
 
+
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "service": "auth_service"
-    }
+    return {"status": "ok", "service": "auth_service"}

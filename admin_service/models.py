@@ -7,18 +7,18 @@ Matches ER diagram: admin entity (admin_id, password, email) — admin users are
 stored in auth_service.users (role=admin). The admin_service itself owns only
 the AuditLog table for tracking all administrative actions.
 """
+
 import enum
 
+from database import Base  # shared Base from database.py
 from sqlalchemy import DateTime, Enum, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from database import Base  # shared Base from database.py
-
-
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
+
 
 class AuditAction(str, enum.Enum):
     # User management
@@ -43,6 +43,7 @@ class AuditAction(str, enum.Enum):
 # Models
 # ---------------------------------------------------------------------------
 
+
 class AuditLog(Base):
     """
     Immutable record of all administrative actions taken in the system.
@@ -50,6 +51,7 @@ class AuditLog(Base):
     target_id: the entity affected (e.g. user_id, course_id, payment_id).
     target_type: the service/entity type ('user', 'course', 'payment', etc.).
     """
+
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -65,7 +67,10 @@ class AuditLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     __table_args__ = (

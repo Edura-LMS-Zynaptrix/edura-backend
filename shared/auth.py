@@ -28,6 +28,7 @@ def require_role(roles: list[str]) -> Callable:
         HTTPException 401 INVALID_TOKEN   — signature invalid or payload corrupt
         HTTPException 403 INSUFFICIENT_PERMISSIONS — role not in allowed list
     """
+
     async def _dependency(request: Request) -> dict:
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
