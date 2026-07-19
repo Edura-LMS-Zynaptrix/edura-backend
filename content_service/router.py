@@ -1,9 +1,14 @@
 import magic
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-
 from cloudinary_utils import get_signed_url, upload_asset
 from enrollment_client import is_enrolled
-from schemas import SignedUrlRequest, SignedUrlResponse, StreamResponse, UploadValidationResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from schemas import (
+    SignedUrlRequest,
+    SignedUrlResponse,
+    StreamResponse,
+    UploadValidationResponse,
+)
+
 from shared.auth import require_role
 
 router = APIRouter()
@@ -21,6 +26,7 @@ ALLOW_ORIGIN = "https://edura.lk"
 # POST /signed-url
 # ---------------------------------------------------------------------------
 
+
 @router.post("/signed-url", response_model=SignedUrlResponse)
 async def generate_signed_url(
     body: SignedUrlRequest,
@@ -33,7 +39,10 @@ async def generate_signed_url(
         if not enrolled:
             raise HTTPException(
                 status_code=403,
-                detail={"error": "NOT_ENROLLED", "message": "Student is not enrolled in this course"},
+                detail={
+                    "error": "NOT_ENROLLED",
+                    "message": "Student is not enrolled in this course",
+                },
             )
 
     url, expires_at = get_signed_url(body.public_id)
@@ -44,11 +53,14 @@ async def generate_signed_url(
 # GET /lessons/{lesson_id}/stream
 # ---------------------------------------------------------------------------
 
+
 @router.get("/lessons/{lesson_id}/stream", response_model=StreamResponse)
 async def stream_lesson(
     lesson_id: int,
     youtube_video_id: str = Query(..., description="YouTube video ID for this lesson"),
-    course_id: int = Query(None, description="Required for students — enrollment is verified"),
+    course_id: int = Query(
+        None, description="Required for students — enrollment is verified"
+    ),
     payload: dict = Depends(require_role(_ALL_ROLES)),
 ):
     role = payload.get("role", "")
@@ -56,14 +68,20 @@ async def stream_lesson(
         if course_id is None:
             raise HTTPException(
                 status_code=422,
-                detail={"error": "COURSE_ID_REQUIRED", "message": "course_id query parameter is required for students"},
+                detail={
+                    "error": "COURSE_ID_REQUIRED",
+                    "message": "course_id query parameter is required for students",
+                },
             )
         student_id = int(payload["sub"])
         enrolled = await is_enrolled(student_id, course_id)
         if not enrolled:
             raise HTTPException(
                 status_code=403,
-                detail={"error": "NOT_ENROLLED", "message": "Student is not enrolled in this course"},
+                detail={
+                    "error": "NOT_ENROLLED",
+                    "message": "Student is not enrolled in this course",
+                },
             )
 
     embed_url = f"{YOUTUBE_EMBED_BASE}/{youtube_video_id}?rel=0&modestbranding=1"
@@ -73,6 +91,7 @@ async def stream_lesson(
 # ---------------------------------------------------------------------------
 # POST /upload
 # ---------------------------------------------------------------------------
+
 
 @router.post("/upload", response_model=UploadValidationResponse)
 async def upload_file(
@@ -84,7 +103,10 @@ async def upload_file(
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
-            detail={"error": "FILE_TOO_LARGE", "message": "File exceeds the 25 MB limit"},
+            detail={
+                "error": "FILE_TOO_LARGE",
+                "message": "File exceeds the 25 MB limit",
+            },
         )
 
     declared_mime = file.content_type or ""

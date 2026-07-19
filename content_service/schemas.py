@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class SignedUrlRequest(BaseModel):
     public_id: str
     course_id: int

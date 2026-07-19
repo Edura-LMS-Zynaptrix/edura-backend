@@ -1,8 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-
 from database import get_db
 from events import publish_course_published
+from fastapi import APIRouter, Depends, HTTPException, Query
 from models import Course, CourseStatus, Lesson, Module
 from schemas import (
     CourseCreate,
@@ -14,6 +12,8 @@ from schemas import (
     ModuleResponse,
     PaginatedCoursesResponse,
 )
+from sqlalchemy.orm import Session
+
 from shared.auth import require_role
 
 router = APIRouter()
@@ -25,6 +25,7 @@ _TEACHER_ADMIN = ["teacher", "admin"]
 # ---------------------------------------------------------------------------
 # Ownership helper
 # ---------------------------------------------------------------------------
+
 
 def assert_course_owner(course: Course, requester_id: int, requester_role: str) -> None:
     if requester_role == "admin":
@@ -41,7 +42,11 @@ def _get_course_or_404(course_id: int, db: Session) -> Course:
 
 
 def _get_module_or_404(module_id: int, course_id: int, db: Session) -> Module:
-    module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id).first()
+    module = (
+        db.query(Module)
+        .filter(Module.id == module_id, Module.course_id == course_id)
+        .first()
+    )
     if not module:
         raise HTTPException(status_code=404, detail={"error": "MODULE_NOT_FOUND"})
     return module
@@ -50,6 +55,7 @@ def _get_module_or_404(module_id: int, course_id: int, db: Session) -> Module:
 # ---------------------------------------------------------------------------
 # Course endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.post("/", response_model=CourseResponse, status_code=201)
 async def create_course(
@@ -138,15 +144,17 @@ async def update_course(
         if not module_with_lesson:
             raise HTTPException(
                 status_code=422,
-                detail={"error": "PUBLISH_REQUIRES_CONTENT",
-                        "message": "Course must have at least one module with one lesson before publishing"},
+                detail={
+                    "error": "PUBLISH_REQUIRES_CONTENT",
+                    "message": "Course must have at least one module with one lesson before publishing",
+                },
             )
         publish_event = True
 
     for field, value in updates.items():
         if field == "status":
             course.status = CourseStatus(value)
-            course.is_published = (value == "PUBLISHED")
+            course.is_published = value == "PUBLISHED"
         else:
             setattr(course, field, value)
 
@@ -177,6 +185,7 @@ async def delete_course(
 # Module endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.post("/{course_id}/modules", response_model=ModuleResponse, status_code=201)
 async def create_module(
     course_id: int,
@@ -203,7 +212,12 @@ async def list_modules(
     db: Session = Depends(get_db),
 ):
     _get_course_or_404(course_id, db)
-    modules = db.query(Module).filter(Module.course_id == course_id).order_by(Module.position).all()
+    modules = (
+        db.query(Module)
+        .filter(Module.course_id == course_id)
+        .order_by(Module.position)
+        .all()
+    )
     return [ModuleResponse.from_orm_module(m) for m in modules]
 
 
@@ -211,7 +225,12 @@ async def list_modules(
 # Lesson endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/{course_id}/modules/{module_id}/lessons", response_model=LessonResponse, status_code=201)
+
+@router.post(
+    "/{course_id}/modules/{module_id}/lessons",
+    response_model=LessonResponse,
+    status_code=201,
+)
 async def create_lesson(
     course_id: int,
     module_id: int,
@@ -240,7 +259,9 @@ async def create_lesson(
     return LessonResponse.from_orm_lesson(lesson)
 
 
-@router.get("/{course_id}/modules/{module_id}/lessons", response_model=list[LessonResponse])
+@router.get(
+    "/{course_id}/modules/{module_id}/lessons", response_model=list[LessonResponse]
+)
 async def list_lessons(
     course_id: int,
     module_id: int,
@@ -249,5 +270,10 @@ async def list_lessons(
 ):
     _get_course_or_404(course_id, db)
     _get_module_or_404(module_id, course_id, db)
-    lessons = db.query(Lesson).filter(Lesson.module_id == module_id).order_by(Lesson.position).all()
-    return [LessonResponse.from_orm_lesson(l) for l in lessons]
+    lessons = (
+        db.query(Lesson)
+        .filter(Lesson.module_id == module_id)
+        .order_by(Lesson.position)
+        .all()
+    )
+    return [LessonResponse.from_orm_lesson(lesson) for lesson in lessons]

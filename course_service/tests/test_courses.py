@@ -4,6 +4,7 @@ Tests for course_service endpoints and ownership helper.
 Unit tests: no DB required.
 Integration tests: require DATABASE_URL env var (Neon); skipped when absent.
 """
+
 import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -31,9 +32,14 @@ ALGORITHM = "HS256"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_token(user_id: int, role: str) -> str:
     return jwt.encode(
-        {"sub": str(user_id), "role": role, "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+        {
+            "sub": str(user_id),
+            "role": role,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
         SECRET,
         algorithm=ALGORITHM,
     )
@@ -47,14 +53,18 @@ def _auth(user_id: int, role: str) -> dict:
 # Unit tests — no database
 # ---------------------------------------------------------------------------
 
+
 class TestAssertCourseOwner:
     def test_matching_teacher_passes(self):
         course = MagicMock()
         course.instructor_id = 42
-        assert_course_owner(course, requester_id=42, requester_role="teacher")  # no raise
+        assert_course_owner(
+            course, requester_id=42, requester_role="teacher"
+        )  # no raise
 
     def test_mismatched_teacher_raises_403(self):
         from fastapi import HTTPException
+
         course = MagicMock()
         course.instructor_id = 42
         with pytest.raises(HTTPException) as exc_info:
@@ -90,6 +100,7 @@ class TestStudentBlockedFromCreateCourse:
 # ---------------------------------------------------------------------------
 # Integration tests — require DATABASE_URL
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def db_engine():
@@ -170,9 +181,14 @@ def published_course(db):
 # AC1: POST / → 201 + GET /{id} → 200
 # ---------------------------------------------------------------------------
 
+
 class TestCreateAndGetCourse:
     def test_teacher_creates_course_returns_201(self, client):
-        r = client.post("/", json={"title": "Python Basics", "price": "500.00"}, headers=_auth(10, "teacher"))
+        r = client.post(
+            "/",
+            json={"title": "Python Basics", "price": "500.00"},
+            headers=_auth(10, "teacher"),
+        )
         assert r.status_code == 201
         data = r.json()
         assert data["title"] == "Python Basics"
@@ -195,6 +211,7 @@ class TestCreateAndGetCourse:
 # ---------------------------------------------------------------------------
 # AC4: Ownership enforcement — TEACHER A cannot modify TEACHER B's course
 # ---------------------------------------------------------------------------
+
 
 class TestOwnershipEnforcement:
     def test_teacher_b_cannot_update_teacher_a_course(self, client, teacher_a_course):
@@ -220,6 +237,7 @@ class TestOwnershipEnforcement:
 # AC3: Publish triggers RabbitMQ event (pika mocked)
 # ---------------------------------------------------------------------------
 
+
 class TestPublishCourse:
     def test_publish_requires_module_with_lesson(self, client, teacher_a_course):
         r = client.put(
@@ -230,7 +248,9 @@ class TestPublishCourse:
         assert r.status_code == 422
         assert r.json()["detail"]["error"] == "PUBLISH_REQUIRES_CONTENT"
 
-    def test_publish_with_content_fires_rabbitmq_event(self, client, db, teacher_a_course):
+    def test_publish_with_content_fires_rabbitmq_event(
+        self, client, db, teacher_a_course
+    ):
         module = Module(course_id=teacher_a_course.id, title="Mod 1", position=1)
         db.add(module)
         db.commit()
@@ -254,7 +274,9 @@ class TestPublishCourse:
             )
         assert r.status_code == 200
         assert r.json()["status"] == "PUBLISHED"
-        mock_pub.assert_called_once_with(teacher_a_course.id, 10, teacher_a_course.title)
+        mock_pub.assert_called_once_with(
+            teacher_a_course.id, 10, teacher_a_course.title
+        )
 
         # Cleanup
         db.delete(lesson)
@@ -265,6 +287,7 @@ class TestPublishCourse:
 # ---------------------------------------------------------------------------
 # AC2: Module and Lesson creation
 # ---------------------------------------------------------------------------
+
 
 class TestModuleAndLessonCRUD:
     def test_create_module_returns_201(self, client, teacher_a_course):
@@ -302,8 +325,11 @@ class TestModuleAndLessonCRUD:
 # AC5: Students see only PUBLISHED courses
 # ---------------------------------------------------------------------------
 
+
 class TestStudentCourseBrowse:
-    def test_student_only_sees_published_courses(self, client, teacher_a_course, published_course):
+    def test_student_only_sees_published_courses(
+        self, client, teacher_a_course, published_course
+    ):
         r = client.get("/", headers=_auth(5, "student"))
         assert r.status_code == 200
         ids = [c["id"] for c in r.json()["items"]]

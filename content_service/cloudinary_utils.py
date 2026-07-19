@@ -16,9 +16,14 @@ def _configure():
     if not (cloud_name and api_key and api_secret):
         raise HTTPException(
             status_code=503,
-            detail={"error": "CLOUDINARY_NOT_CONFIGURED", "message": "Cloudinary credentials are not set"},
+            detail={
+                "error": "CLOUDINARY_NOT_CONFIGURED",
+                "message": "Cloudinary credentials are not set",
+            },
         )
-    cloudinary.config(cloud_name=cloud_name, api_key=api_key, api_secret=api_secret, secure=True)
+    cloudinary.config(
+        cloud_name=cloud_name, api_key=api_key, api_secret=api_secret, secure=True
+    )
 
 
 def upload_asset(content: bytes, filename: str) -> tuple[str, str]:
