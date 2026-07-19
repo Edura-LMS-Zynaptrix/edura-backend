@@ -9,7 +9,10 @@ This file provides only the Base import for Alembic compatibility.
 If a future requirement adds aggregated analytics snapshots (e.g. DailyActiveUsers,
 CourseViewCount), add models here.
 """
-from database import Base  # noqa: F401 — imported so Alembic detects this service's Base
+
+from database import (
+    Base,  # noqa: F401 — imported so Alembic detects this service's Base
+)
 
 # No owned tables in analytics_service.
 # This service aggregates data from other services' databases via read replicas

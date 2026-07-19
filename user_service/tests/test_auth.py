@@ -3,10 +3,10 @@ Unit tests for shared/auth.py — require_role dependency.
 
 These tests are fully in-memory: no database, no external services.
 """
+
 import os
 from datetime import datetime, timedelta, timezone
 
-import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from jose import jwt
@@ -23,6 +23,7 @@ SECRET = "test-secret-key-for-unit-tests"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_token(role: str, exp_seconds: int = 3600, sub: str = "42") -> str:
     payload = {
@@ -55,7 +56,9 @@ async def teacher_or_admin(_: dict = Depends(require_role(["teacher", "admin"]))
 
 
 @_app.get("/any-role")
-async def any_role(payload: dict = Depends(require_role(["student", "teacher", "admin"]))):
+async def any_role(
+    payload: dict = Depends(require_role(["student", "teacher", "admin"]))
+):
     return {"sub": payload["sub"], "role": payload["role"]}
 
 
@@ -65,6 +68,7 @@ _client = TestClient(_app, raise_server_exceptions=False)
 # ---------------------------------------------------------------------------
 # AC4: require_role(["TEACHER","ADMIN"]) — blocks STUDENT
 # ---------------------------------------------------------------------------
+
 
 class TestAdminOnly:
     def test_admin_passes(self):
@@ -101,6 +105,7 @@ class TestTeacherOrAdmin:
 # AC: missing / malformed Authorization header → 401 MISSING_TOKEN
 # ---------------------------------------------------------------------------
 
+
 class TestMissingToken:
     def test_no_header_returns_401(self):
         r = _client.get("/admin-only")
@@ -121,6 +126,7 @@ class TestMissingToken:
 # AC: expired JWT → 401 TOKEN_EXPIRED
 # ---------------------------------------------------------------------------
 
+
 class TestExpiredToken:
     def test_expired_token_returns_401(self):
         token = _make_token("admin", exp_seconds=-60)
@@ -133,6 +139,7 @@ class TestExpiredToken:
 # AC: tampered / invalid token → 401 INVALID_TOKEN
 # ---------------------------------------------------------------------------
 
+
 class TestInvalidToken:
     def test_garbage_token_returns_401(self):
         r = _client.get("/admin-only", headers={"Authorization": "Bearer not.a.jwt"})
@@ -141,7 +148,11 @@ class TestInvalidToken:
 
     def test_wrong_secret_returns_401(self):
         token = jwt.encode(
-            {"sub": "1", "role": "admin", "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+            {
+                "sub": "1",
+                "role": "admin",
+                "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            },
             "wrong-secret",
             algorithm=ALGORITHM,
         )
@@ -153,6 +164,7 @@ class TestInvalidToken:
 # ---------------------------------------------------------------------------
 # AC5: Depends injection returns payload to handler
 # ---------------------------------------------------------------------------
+
 
 class TestPayloadInjection:
     def test_payload_sub_and_role_accessible(self):
