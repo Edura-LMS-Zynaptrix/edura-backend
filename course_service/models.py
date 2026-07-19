@@ -19,8 +19,15 @@ from sqlalchemy.sql import func
 
 
 class CourseType(str, enum.Enum):
-    video = "video"  # Video course (streaming)
-    exam = "exam"  # Exam / assessment course
+    video = "video"
+    exam = "exam"
+
+
+class CourseStatus(str, enum.Enum):
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+    ARCHIVED = "ARCHIVED"
+
 
 
 class LessonType(str, enum.Enum):
@@ -51,6 +58,9 @@ class Course(Base):
     )
     price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
     is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[CourseStatus] = mapped_column(
+        Enum(CourseStatus, name="coursestatusenum"), nullable=False, default=CourseStatus.DRAFT
+    )
     thumbnail_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -108,6 +118,8 @@ class Lesson(Base):
         Enum(LessonType, name="lessontype"), nullable=False, default=LessonType.video
     )
     video_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    youtube_video_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cloudinary_asset_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_free_preview: Mapped[bool] = mapped_column(
