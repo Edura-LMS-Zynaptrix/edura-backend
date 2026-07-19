@@ -41,9 +41,7 @@ class UserProfile(Base):
     __tablename__ = "user_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, nullable=False, unique=True, index=True
-    )
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
     role: Mapped[ProfileRole] = mapped_column(
         Enum(ProfileRole, name="profilerole"),
         nullable=False,

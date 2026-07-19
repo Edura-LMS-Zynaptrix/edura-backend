@@ -49,7 +49,7 @@ class Course(Base):
     __tablename__ = "courses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    instructor_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    instructor_id: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     course_type: Mapped[CourseType] = mapped_column(
@@ -85,7 +85,7 @@ class Module(Base):
     __tablename__ = "modules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    course_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -112,8 +112,8 @@ class Lesson(Base):
     __tablename__ = "lessons"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    module_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    course_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    module_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     lesson_type: Mapped[LessonType] = mapped_column(
         Enum(LessonType, name="lessontype"), nullable=False, default=LessonType.video
