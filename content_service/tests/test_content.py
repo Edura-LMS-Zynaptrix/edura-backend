@@ -2,12 +2,11 @@
 Tests for content_service: signed URL, stream, and upload endpoints.
 All external calls (Cloudinary, enrollment_service, python-magic) are mocked.
 """
-import io
+
 import os
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from jose import jwt
 
@@ -25,9 +24,14 @@ client = TestClient(app, raise_server_exceptions=False)
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_token(user_id: int, role: str) -> str:
     return jwt.encode(
-        {"sub": str(user_id), "role": role, "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+        {
+            "sub": str(user_id),
+            "role": role,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
         SECRET,
         algorithm=ALGORITHM,
     )
@@ -41,6 +45,7 @@ def _auth(user_id: int, role: str) -> dict:
 # Health
 # ---------------------------------------------------------------------------
 
+
 class TestHealth:
     def test_health_returns_ok(self):
         r = client.get("/health")
@@ -52,9 +57,12 @@ class TestHealth:
 # POST /signed-url
 # ---------------------------------------------------------------------------
 
+
 class TestSignedUrl:
     def test_missing_token_returns_401(self):
-        r = client.post("/signed-url", json={"public_id": "img/test.jpg", "course_id": 1})
+        r = client.post(
+            "/signed-url", json={"public_id": "img/test.jpg", "course_id": 1}
+        )
         assert r.status_code == 401
         assert r.json()["detail"]["error"] == "MISSING_TOKEN"
 
@@ -71,7 +79,10 @@ class TestSignedUrl:
     def test_enrolled_student_gets_signed_url(self):
         with (
             patch("router.is_enrolled", new=AsyncMock(return_value=True)),
-            patch("router.get_signed_url", return_value=("https://res.cloudinary.com/signed?sig=abc", 9999999999)),
+            patch(
+                "router.get_signed_url",
+                return_value=("https://res.cloudinary.com/signed?sig=abc", 9999999999),
+            ),
         ):
             r = client.post(
                 "/signed-url",
@@ -84,7 +95,10 @@ class TestSignedUrl:
         assert "expires_at" in data
 
     def test_teacher_gets_signed_url_without_enrollment_check(self):
-        with patch("router.get_signed_url", return_value=("https://res.cloudinary.com/signed?sig=xyz", 9999999999)):
+        with patch(
+            "router.get_signed_url",
+            return_value=("https://res.cloudinary.com/signed?sig=xyz", 9999999999),
+        ):
             r = client.post(
                 "/signed-url",
                 json={"public_id": "img/lecture.jpg", "course_id": 1},
@@ -94,7 +108,10 @@ class TestSignedUrl:
         assert "signed_url" in r.json()
 
     def test_admin_gets_signed_url_without_enrollment_check(self):
-        with patch("router.get_signed_url", return_value=("https://res.cloudinary.com/signed?sig=adm", 9999999999)):
+        with patch(
+            "router.get_signed_url",
+            return_value=("https://res.cloudinary.com/signed?sig=adm", 9999999999),
+        ):
             r = client.post(
                 "/signed-url",
                 json={"public_id": "img/admin.jpg", "course_id": 1},
@@ -106,6 +123,7 @@ class TestSignedUrl:
 # ---------------------------------------------------------------------------
 # GET /lessons/{lesson_id}/stream
 # ---------------------------------------------------------------------------
+
 
 class TestStreamLesson:
     def test_missing_token_returns_401(self):
@@ -158,6 +176,7 @@ class TestStreamLesson:
 # POST /upload
 # ---------------------------------------------------------------------------
 
+
 class TestUpload:
     def test_student_cannot_upload(self):
         r = client.post(
@@ -169,7 +188,9 @@ class TestUpload:
         assert r.json()["detail"]["error"] == "INSUFFICIENT_PERMISSIONS"
 
     def test_missing_token_returns_401(self):
-        r = client.post("/upload", files={"file": ("test.pdf", b"data", "application/pdf")})
+        r = client.post(
+            "/upload", files={"file": ("test.pdf", b"data", "application/pdf")}
+        )
         assert r.status_code == 401
 
     def test_file_too_large_returns_413(self):
@@ -205,7 +226,13 @@ class TestUpload:
         pdf_bytes = b"%PDF-1.4 fake pdf content"
         with (
             patch("router.magic.from_buffer", return_value="application/pdf"),
-            patch("router.upload_asset", return_value=("edura/uploads/lecture", "https://res.cloudinary.com/demo/raw/upload/edura/uploads/lecture.pdf")),
+            patch(
+                "router.upload_asset",
+                return_value=(
+                    "edura/uploads/lecture",
+                    "https://res.cloudinary.com/demo/raw/upload/edura/uploads/lecture.pdf",
+                ),
+            ),
         ):
             r = client.post(
                 "/upload",
@@ -224,7 +251,13 @@ class TestUpload:
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         with (
             patch("router.magic.from_buffer", return_value="image/png"),
-            patch("router.upload_asset", return_value=("edura/uploads/thumb", "https://res.cloudinary.com/demo/image/upload/edura/uploads/thumb.png")),
+            patch(
+                "router.upload_asset",
+                return_value=(
+                    "edura/uploads/thumb",
+                    "https://res.cloudinary.com/demo/image/upload/edura/uploads/thumb.png",
+                ),
+            ),
         ):
             r = client.post(
                 "/upload",
@@ -239,7 +272,13 @@ class TestUpload:
         jpeg_bytes = b"\xff\xd8\xff" + b"\x00" * 50
         with (
             patch("router.magic.from_buffer", return_value="image/jpeg"),
-            patch("router.upload_asset", return_value=("edura/uploads/photo", "https://res.cloudinary.com/demo/image/upload/edura/uploads/photo.jpg")),
+            patch(
+                "router.upload_asset",
+                return_value=(
+                    "edura/uploads/photo",
+                    "https://res.cloudinary.com/demo/image/upload/edura/uploads/photo.jpg",
+                ),
+            ),
         ):
             r = client.post(
                 "/upload",

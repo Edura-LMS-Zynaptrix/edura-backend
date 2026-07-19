@@ -11,16 +11,22 @@ EXCHANGE = "edura.events"
 
 
 def publish_course_published(course_id: int, teacher_id: int, title: str) -> None:
-    payload = json.dumps({"course_id": course_id, "teacher_id": teacher_id, "title": title})
+    payload = json.dumps(
+        {"course_id": course_id, "teacher_id": teacher_id, "title": title}
+    )
     try:
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=RABBITMQ_HOST)
+        )
         channel = connection.channel()
         channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
         channel.basic_publish(
             exchange=EXCHANGE,
             routing_key="course.published",
             body=payload,
-            properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"),
+            properties=pika.BasicProperties(
+                delivery_mode=2, content_type="application/json"
+            ),
         )
         connection.close()
         logger.info("Published course.published event for course_id=%s", course_id)

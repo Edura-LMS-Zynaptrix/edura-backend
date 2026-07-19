@@ -29,7 +29,6 @@ class CourseStatus(str, enum.Enum):
     ARCHIVED = "ARCHIVED"
 
 
-
 class LessonType(str, enum.Enum):
     video = "video"
     document = "document"
@@ -59,7 +58,9 @@ class Course(Base):
     price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.00)
     is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[CourseStatus] = mapped_column(
-        Enum(CourseStatus, name="coursestatusenum"), nullable=False, default=CourseStatus.DRAFT
+        Enum(CourseStatus, name="coursestatusenum"),
+        nullable=False,
+        default=CourseStatus.DRAFT,
     )
     thumbnail_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[DateTime] = mapped_column(

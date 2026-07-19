@@ -4,8 +4,6 @@ from typing import Optional
 
 from pydantic import BaseModel, field_validator
 
-from models import CourseStatus
-
 
 class CourseCreate(BaseModel):
     title: str
@@ -47,7 +45,11 @@ class CourseResponse(BaseModel):
             description=course.description,
             price=course.price,
             teacher_id=course.instructor_id,
-            status=course.status.value if hasattr(course.status, "value") else course.status,
+            status=(
+                course.status.value
+                if hasattr(course.status, "value")
+                else course.status
+            ),
             created_at=course.created_at,
             updated_at=course.updated_at,
         )
