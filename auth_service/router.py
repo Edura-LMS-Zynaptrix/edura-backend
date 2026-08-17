@@ -1,9 +1,8 @@
 import bcrypt
 from database import SessionLocal
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
-from models import OtpCode, RefreshToken, User, UserRole
+from models import User, UserRole
 from schemas import (
-    ErrorResponse,
     LoginRequest,
     OtpRequest,
     OtpVerifyRequest,
@@ -13,8 +12,9 @@ from schemas import (
     UserResponse,
 )
 from services import OtpService, SessionService, TokenService
-from shared.auth import require_role
 from sqlalchemy.orm import Session
+
+from shared.auth import require_role
 
 router = APIRouter(tags=["auth"])
 

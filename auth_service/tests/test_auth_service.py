@@ -1,8 +1,6 @@
 import os
 import sys
-from datetime import datetime, timedelta, timezone
 
-import bcrypt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,11 +10,9 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
-from database import Base, engine as prod_engine
+from database import Base
 from main import app
-from models import RefreshToken, User, UserRole
 from services import OtpService, SessionService, TokenService
-from shared.auth import require_role
 
 # Configure SQLite database for testing
 from sqlalchemy import create_engine
@@ -77,9 +73,9 @@ def test_otp_service_generate_and_verify():
 
 def test_session_service_limit():
     user_id = 99
-    s1 = SessionService.create_session(user_id, "STUDENT")
-    s2 = SessionService.create_session(user_id, "STUDENT")
-    s3 = SessionService.create_session(user_id, "STUDENT")
+    _s1 = SessionService.create_session(user_id, "STUDENT")
+    _s2 = SessionService.create_session(user_id, "STUDENT")
+    _s3 = SessionService.create_session(user_id, "STUDENT")
     s4 = SessionService.create_session(user_id, "STUDENT")
     assert s4 is not None
 

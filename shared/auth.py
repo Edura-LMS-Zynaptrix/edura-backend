@@ -1,5 +1,5 @@
 import os
-from typing import Callable, List, Optional, Union
+from typing import Callable, List
 
 from fastapi import HTTPException, Request
 from jose import ExpiredSignatureError, JWTError, jwt
@@ -53,7 +53,9 @@ def require_role(roles: List[str]) -> Callable:
 
         try:
             # Decode using HS256 key (or unverified/JWKS fallback if configured)
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_aud": False})
+            payload = jwt.decode(
+                token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_aud": False}
+            )
         except ExpiredSignatureError:
             raise HTTPException(
                 status_code=401,

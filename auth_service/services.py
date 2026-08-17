@@ -1,14 +1,13 @@
 import hashlib
-import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, List, Optional, Tuple
 
 from config import settings
 from fastapi import HTTPException
-from jose import ExpiredSignatureError, JWTError, jwt
-from models import OtpPurpose, RefreshToken, User, UserRole
+from jose import jwt
+from models import RefreshToken
 from sqlalchemy.orm import Session
 
 
@@ -38,7 +37,7 @@ class MemoryRedisClient:
         prefix = pattern.replace("*", "")
         now = datetime.now(timezone.utc)
         valid_keys = []
-        for k, (v, exp) in list(self._store.items()):
+        for k, (_v, exp) in list(self._store.items()):
             if exp and now > exp:
                 del self._store[k]
                 continue

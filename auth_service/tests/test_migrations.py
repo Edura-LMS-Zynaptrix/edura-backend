@@ -69,9 +69,9 @@ def test_migration_lifecycle(engine):
 
     # Check that each expected table is created
     for table in expected_tables:
-        assert table in existing_tables, (
-            f"Expected table '{table}' was not created by migration"
-        )
+        assert (
+            table in existing_tables
+        ), f"Expected table '{table}' was not created by migration"
 
     # 6. Downgrade to base
     command.downgrade(alembic_cfg, "base")
@@ -93,15 +93,15 @@ def test_migration_lifecycle(engine):
     remaining_tables = [
         t for t in inspector.get_table_names() if t != "alembic_version"
     ]
-    assert len(remaining_tables) == 0, (
-        f"Some tables remained after downgrade: {remaining_tables}"
-    )
+    assert (
+        len(remaining_tables) == 0
+    ), f"Some tables remained after downgrade: {remaining_tables}"
 
     # 8. Upgrade back to head to verify idempotency
     command.upgrade(alembic_cfg, "head")
     inspector = inspect(engine)
     existing_tables_retry = set(inspector.get_table_names())
     for table in expected_tables:
-        assert table in existing_tables_retry, (
-            f"Expected table '{table}' was not created on second upgrade"
-        )
+        assert (
+            table in existing_tables_retry
+        ), f"Expected table '{table}' was not created on second upgrade"

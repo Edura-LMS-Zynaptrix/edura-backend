@@ -1,6 +1,7 @@
 from typing import Optional
-from pydantic import BaseModel, EmailStr, Field
-from models import UserRole, OtpPurpose
+
+from models import OtpPurpose, UserRole
+from pydantic import BaseModel, EmailStr
 
 
 class LoginRequest(BaseModel):

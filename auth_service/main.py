@@ -5,9 +5,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from database import Base, engine
 from fastapi import FastAPI
 from router import router
-from database import Base, engine
 
 # Ensure DB tables exist on startup
 Base.metadata.create_all(bind=engine)
