@@ -137,17 +137,13 @@ def test_refresh_token_rotation_and_reuse():
     initial_refresh_token = login_resp.cookies["refresh_token"]
 
     # First refresh call - Success
-    ref_resp = client.post(
-        "/refresh", json={"refresh_token": initial_refresh_token}
-    )
+    ref_resp = client.post("/refresh", json={"refresh_token": initial_refresh_token})
     assert ref_resp.status_code == 200
     new_access_token = ref_resp.json()["access_token"]
     assert new_access_token is not None
 
     # Reuse of initial refresh token - Should fail with REFRESH_TOKEN_REUSE
-    reuse_resp = client.post(
-        "/refresh", json={"refresh_token": initial_refresh_token}
-    )
+    reuse_resp = client.post("/refresh", json={"refresh_token": initial_refresh_token})
     assert reuse_resp.status_code == 401
     assert reuse_resp.json()["detail"]["error"] == "REFRESH_TOKEN_REUSE"
 
