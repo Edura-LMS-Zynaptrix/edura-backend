@@ -83,7 +83,7 @@ def test_session_service_limit():
 def test_register_and_login_success():
     # Register user
     reg_resp = client.post(
-        "/api/auth/register",
+        "/register",
         json={
             "email": "student@edura.com",
             "password": "password123",
@@ -96,7 +96,7 @@ def test_register_and_login_success():
 
     # Login user
     login_resp = client.post(
-        "/api/auth/login",
+        "/login",
         json={"email": "student@edura.com", "password": "password123"},
     )
     assert login_resp.status_code == 200
@@ -108,7 +108,7 @@ def test_register_and_login_success():
 
 def test_login_invalid_credentials():
     client.post(
-        "/api/auth/register",
+        "/register",
         json={
             "email": "teacher@edura.com",
             "password": "password123",
@@ -117,7 +117,7 @@ def test_login_invalid_credentials():
     )
 
     resp = client.post(
-        "/api/auth/login",
+        "/login",
         json={"email": "teacher@edura.com", "password": "wrongpassword"},
     )
     assert resp.status_code == 401
@@ -127,18 +127,18 @@ def test_login_invalid_credentials():
 def test_refresh_token_rotation_and_reuse():
     # Register & Login
     client.post(
-        "/api/auth/register",
+        "/register",
         json={"email": "admin@edura.com", "password": "password123", "role": "admin"},
     )
     login_resp = client.post(
-        "/api/auth/login",
+        "/login",
         json={"email": "admin@edura.com", "password": "password123"},
     )
     initial_refresh_token = login_resp.cookies["refresh_token"]
 
     # First refresh call - Success
     ref_resp = client.post(
-        "/api/auth/refresh", json={"refresh_token": initial_refresh_token}
+        "/refresh", json={"refresh_token": initial_refresh_token}
     )
     assert ref_resp.status_code == 200
     new_access_token = ref_resp.json()["access_token"]
@@ -146,7 +146,7 @@ def test_refresh_token_rotation_and_reuse():
 
     # Reuse of initial refresh token - Should fail with REFRESH_TOKEN_REUSE
     reuse_resp = client.post(
-        "/api/auth/refresh", json={"refresh_token": initial_refresh_token}
+        "/refresh", json={"refresh_token": initial_refresh_token}
     )
     assert reuse_resp.status_code == 401
     assert reuse_resp.json()["detail"]["error"] == "REFRESH_TOKEN_REUSE"
@@ -155,29 +155,29 @@ def test_refresh_token_rotation_and_reuse():
 def test_protected_route_role_enforcement():
     # Register Student
     client.post(
-        "/api/auth/register",
+        "/register",
         json={"email": "user@edura.com", "password": "password123", "role": "student"},
     )
     login_resp = client.post(
-        "/api/auth/login",
+        "/login",
         json={"email": "user@edura.com", "password": "password123"},
     )
     access_token = login_resp.json()["access_token"]
 
     # Access protected route with Bearer token
     headers = {"Authorization": f"Bearer {access_token}"}
-    prot_resp = client.get("/api/auth/protected", headers=headers)
+    prot_resp = client.get("/protected", headers=headers)
     assert prot_resp.status_code == 200
     assert prot_resp.json()["role"] == "STUDENT"
 
     # Access admin route with student token - Should fail with 403 INSUFFICIENT_PERMISSIONS
-    admin_resp = client.get("/api/auth/admin", headers=headers)
+    admin_resp = client.get("/admin", headers=headers)
     assert admin_resp.status_code == 403
     assert admin_resp.json()["detail"]["error"] == "INSUFFICIENT_PERMISSIONS"
 
 
 def test_missing_and_expired_token():
     # Missing token
-    resp_no_token = client.get("/api/auth/protected")
+    resp_no_token = client.get("/protected")
     assert resp_no_token.status_code == 401
     assert resp_no_token.json()["detail"]["error"] == "MISSING_TOKEN"
