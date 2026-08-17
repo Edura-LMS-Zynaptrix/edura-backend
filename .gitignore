@@ -149,3 +149,10 @@ cython_debug/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+test_auth.db
+auth.db

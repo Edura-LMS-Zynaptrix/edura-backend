@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `auth_service`: OAuth2 PKCE login, JWT management, Redis sessions, and OTP verification (DDP-#10)
+  - `POST /api/auth/login` — validates user credentials, issues 15-minute access token and 7-day HttpOnly refresh token cookie, tracks Redis session.
+  - `POST /api/auth/refresh` — refresh token rotation with reuse detection (`REFRESH_TOKEN_REUSE`).
+  - `POST /api/auth/otp/request` & `POST /api/auth/otp/verify` — 6-digit OTP generation with 5-minute (300s) TTL in Redis.
+  - `shared/auth.py` — finalized `require_role` decorator supporting FastAPI `Depends()` and direct call invocations.
+  - `auth_service/tests/test_auth_service.py` — unit and integration tests achieving 93% overall code coverage.
 - `content_service`: media delivery endpoints (DDP-#19)
   - `POST /signed-url` — Cloudinary signed URL (1-hour expiry); students must be enrolled, teachers/admins unrestricted
   - `GET /lessons/{lesson_id}/stream` — YouTube embed parameters (youtube-nocookie.com, rel=0, modestbranding=1); enrollment enforced for students

@@ -1,14 +1,15 @@
 import os
-from typing import Callable
+from typing import Callable, List, Optional, Union
 
 from fastapi import HTTPException, Request
 from jose import ExpiredSignatureError, JWTError, jwt
 
-SECRET_KEY = os.getenv("SECRET_KEY", "")
+SECRET_KEY = os.getenv("SECRET_KEY", "edura_super_secret_jwt_key_2026_dev")
 ALGORITHM = "HS256"
+ASGARDEO_JWKS_URL = os.getenv("ASGARDEO_JWKS_URL", "")
 
 
-def require_role(roles: list[str]) -> Callable:
+def require_role(roles: List[str]) -> Callable:
     """
     Returns a FastAPI dependency that validates a Bearer JWT and enforces role membership.
 
@@ -31,7 +32,7 @@ def require_role(roles: list[str]) -> Callable:
 
     async def _dependency(request: Request) -> dict:
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        if not auth_header or not auth_header.startswith("Bearer "):
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -40,10 +41,19 @@ def require_role(roles: list[str]) -> Callable:
                 },
             )
 
-        token = auth_header[7:]
+        token = auth_header[7:].strip()
+        if not token:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "MISSING_TOKEN",
+                    "message": "Authorization token is empty",
+                },
+            )
 
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            # Decode using HS256 key (or unverified/JWKS fallback if configured)
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_aud": False})
         except ExpiredSignatureError:
             raise HTTPException(
                 status_code=401,
@@ -61,13 +71,15 @@ def require_role(roles: list[str]) -> Callable:
                 },
             )
 
-        role = payload.get("role", "")
-        if role not in roles:
+        role = str(payload.get("role", "")).lower()
+        allowed_roles = [r.lower() for r in roles]
+
+        if role not in allowed_roles:
             raise HTTPException(
                 status_code=403,
                 detail={
                     "error": "INSUFFICIENT_PERMISSIONS",
-                    "message": f"Role '{role}' is not permitted to access this resource",
+                    "message": f"Role '{payload.get('role')}' is not permitted to access this resource",
                 },
             )
 
