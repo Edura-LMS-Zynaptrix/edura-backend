@@ -1,0 +1,69 @@
+name: EDURA Backend CI
+
+on:
+  push:
+    branches: [ develop, main, 'feature/**', 'fix/**' ]
+  pull_request:
+    branches: [ develop, main ]
+
+jobs:
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Linting Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black
+
+      - name: Run Ruff Linter
+        run: ruff check .
+
+      - name: Run Black Formatter Check
+        run: black --check .
+
+  unit-tests:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          find . -name "requirements.txt" -exec pip install -r {} \;
+          pip install pytest pytest-cov httpx email-validator pydantic-settings bcrypt
+
+      - name: Run Auth Service Tests
+        env:
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          SECRET_KEY: test_secret_key
+        run: |
+          PYTHONPATH=. pytest auth_service/tests/test_auth_service.py --cov=auth_service --cov-report=term-missing
