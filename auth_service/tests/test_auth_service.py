@@ -177,3 +177,12 @@ def test_missing_and_expired_token():
     resp_no_token = client.get("/protected")
     assert resp_no_token.status_code == 401
     assert resp_no_token.json()["detail"]["error"] == "MISSING_TOKEN"
+
+
+def test_ci_health_check():
+    response = client.get("/ci-health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "message": "CI workflow verification successful",
+    }

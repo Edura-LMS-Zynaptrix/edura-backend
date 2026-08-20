@@ -169,3 +169,8 @@ def protected_route(
         "user_id": payload.get("sub"),
         "role": payload.get("role"),
     }
+
+
+@router.get("/ci-health")
+def ci_health_check():
+    return {"status": "ok", "message": "CI workflow verification successful"}
