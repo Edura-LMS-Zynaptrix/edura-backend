@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 from config import settings
 from fastapi import HTTPException
-from jose import jwt
+import jwt
 from models import RefreshToken
 from sqlalchemy.orm import Session
 

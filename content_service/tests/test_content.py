@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
-from jose import jwt
+import jwt
 
 os.environ.setdefault("SECRET_KEY", "test-secret-for-content-service")
 
