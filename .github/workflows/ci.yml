@@ -1,40 +1,47 @@
-name: EDURA Backend CI
+name: Backend CI — Microservices Matrix
 
 on:
-  push:
-    branches: [ develop, main, 'feature/**', 'fix/**' ]
   pull_request:
     branches: [ develop, main ]
 
 jobs:
-  lint:
-    name: Lint & Format Check
+  verify-service:
+    name: Verify ${{ matrix.service }}
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    
+    # This prevents GitHub from cancelling the other 10 services if 1 fails
+    strategy:
+      fail-fast: false 
+      matrix:
+        # The 11 services defined in your project architecture[cite: 1]
+        service: 
+          - auth_service
+          - user_service
+          - course_service
+          - content_service
+          - enrollment_service
+          - payment_service
+          - assessment_service
+          - progress_service
+          - notification_service
+          - analytics_service
+          - admin_service
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Linting Tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff black
-
-      - name: Run Ruff Linter
-        run: ruff check .
-
-      - name: Run Black Formatter Check
-        run: black --check .
-
-  unit-tests:
-    name: Unit & Integration Tests
-    runs-on: ubuntu-latest
-    needs: lint
+    # Spin up isolated test databases for the specific runner[cite: 2]
     services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
       redis:
         image: redis:7
         ports:
@@ -46,24 +53,58 @@ jobs:
           --health-retries 5
 
     steps:
-      - name: Checkout Code
+      # Checkout the edura-backend code (No PAT required here anymore!)
+      - name: Checkout Backend Repo
         uses: actions/checkout@v4
 
+      # Setup Python environment[cite: 2]
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip' # Speeds up installation
 
-      - name: Install Dependencies
+      # Install global linting and testing tools[cite: 2]
+      - name: Install Base Tools
         run: |
           python -m pip install --upgrade pip
-          find . -name "requirements.txt" -exec pip install -r {} \;
-          pip install pytest pytest-cov httpx email-validator pydantic-settings bcrypt
+          pip install ruff black pytest pytest-cov httpx pip-audit
 
-      - name: Run Auth Service Tests
+      # Install the specific dependencies for the current matrix service
+      - name: Install ${{ matrix.service }} Dependencies
+        run: |
+          if [ -f "${{ matrix.service }}/requirements.txt" ]; then
+            pip install -r ${{ matrix.service }}/requirements.txt
+          fi
+
+      # Run Linters[cite: 2]
+      - name: Run Ruff
+        run: ruff check ${{ matrix.service }}/
+
+      - name: Run Black
+        run: black --check ${{ matrix.service }}/
+
+      # Setup specific database for this service[cite: 2]
+      - name: Create Test Database
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_db -c "CREATE DATABASE test_db_${{ matrix.service }};" || true
+
+      # Run Pytest for this specific service[cite: 2]
+      - name: Run Unit Tests
         env:
           REDIS_HOST: localhost
-          REDIS_PORT: 6379
-          SECRET_KEY: test_secret_key
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db_${{ matrix.service }}
+          PYTHONPATH: ${{ matrix.service }}
         run: |
-          PYTHONPATH=. pytest auth_service/tests/test_auth_service.py --cov=auth_service --cov-report=term-missing
+          if [ -d "${{ matrix.service }}/tests" ]; then
+            pytest ${{ matrix.service }} --cov=${{ matrix.service }} --cov-report=xml
+          else
+            echo "No tests folder found for ${{ matrix.service }}, skipping pytest."
+          fi
+
+      # Run Security Audit on the service's dependencies[cite: 2]
+      - name: Security Scan
+        run: |
+          if [ -f "${{ matrix.service }}/requirements.txt" ]; then
+            pip-audit -r ${{ matrix.service }}/requirements.txt --fail-on-severity high
+          fi
