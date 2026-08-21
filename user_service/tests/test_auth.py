@@ -7,9 +7,9 @@ These tests are fully in-memory: no database, no external services.
 import os
 from datetime import datetime, timedelta, timezone
 
+import jwt
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from jose import jwt
 
 # Set secret before importing require_role so the module picks it up
 os.environ["SECRET_KEY"] = "test-secret-key-for-unit-tests"

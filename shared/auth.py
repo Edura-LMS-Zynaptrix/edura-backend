@@ -1,8 +1,9 @@
 import os
 from typing import Callable, List
 
+import jwt
 from fastapi import HTTPException, Request
-from jose import ExpiredSignatureError, JWTError, jwt
+from jwt.exceptions import ExpiredSignatureError, PyJWTError
 
 SECRET_KEY = os.getenv("SECRET_KEY", "edura_super_secret_jwt_key_2026_dev")
 ALGORITHM = "HS256"
@@ -64,7 +65,7 @@ def require_role(roles: List[str]) -> Callable:
                     "message": "Access token has expired",
                 },
             )
-        except JWTError:
+        except PyJWTError:
             raise HTTPException(
                 status_code=401,
                 detail={
