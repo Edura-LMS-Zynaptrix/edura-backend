@@ -7,9 +7,9 @@ Requires DATABASE_URL to be set in the environment. Skipped when absent.
 import os
 from datetime import datetime, timedelta, timezone
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
-import jwt
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

@@ -4,9 +4,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
+import jwt
 from config import settings
 from fastapi import HTTPException
-import jwt
 from models import RefreshToken
 from sqlalchemy.orm import Session
 
