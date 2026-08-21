@@ -106,5 +106,5 @@ jobs:
       - name: Security Scan
         run: |
           if [ -f "${{ matrix.service }}/requirements.txt" ]; then
-            pip-audit -r ${{ matrix.service }}/requirements.txt --fail-on-severity high
+            pip-audit -r ${{ matrix.service }}/requirements.txt
           fi
