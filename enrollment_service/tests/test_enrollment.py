@@ -12,18 +12,13 @@ TEST_DATABASE_URL = "sqlite:///./test_enrollment_db.db"
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 import database
-from database import Base, get_db
-import models
-from models import Enrollment, EnrollmentStatus
 import services
+from database import Base, get_db
+from models import Enrollment, EnrollmentStatus
 
 # Create SQLite engine
-engine = create_engine(
-    TEST_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(
-    autocommit=False, autoflush=False, bind=engine
-)
+engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Patch SessionLocal in database module and consumer
 database.engine = engine
@@ -32,8 +27,9 @@ database.SessionLocal = TestingSessionLocal
 
 Base.metadata.create_all(bind=engine)
 
-from main import app
 import consumer
+from main import app
+
 
 def override_get_db():
     db = TestingSessionLocal()
@@ -41,6 +37,7 @@ def override_get_db():
         yield db
     finally:
         db.close()
+
 
 app.dependency_overrides[get_db] = override_get_db
 
@@ -60,15 +57,12 @@ def setup_db():
             pass
 
 
-
 # ---------------------------------------------------------------------------
 # Test AC2: GET /api/enrollments Query Endpoint
 # ---------------------------------------------------------------------------
 def test_get_enrollment_success():
     db = TestingSessionLocal()
-    enrollment = services.activate_or_extend_enrollment(
-        db, student_id=10, course_id=20
-    )
+    enrollment = services.activate_or_extend_enrollment(db, student_id=10, course_id=20)
 
     r = client.get("/api/enrollments?student_id=10&course_id=20")
 

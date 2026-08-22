@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
-from sqlalchemy.orm import Session
+
 from models import Enrollment, EnrollmentStatus
+from sqlalchemy.orm import Session
 
 
 def activate_or_extend_enrollment(

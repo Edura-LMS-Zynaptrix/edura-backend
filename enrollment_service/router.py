@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
-
 from database import get_db
-from models import Enrollment, EnrollmentStatus
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from models import Enrollment
 from schemas import EnrollmentResponse
+from sqlalchemy.orm import Session
 
 router = APIRouter()
 

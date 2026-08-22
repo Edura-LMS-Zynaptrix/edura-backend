@@ -1,9 +1,9 @@
 import threading
 from contextlib import asynccontextmanager
 
+import consumer
 from fastapi import FastAPI
 from router import router
-import consumer
 
 
 @asynccontextmanager
@@ -11,7 +11,7 @@ async def lifespan(app: FastAPI):
     # Ensure database schema is created/up-to-date
     try:
         from database import Base, engine
-        import models
+
         Base.metadata.create_all(bind=engine)
     except Exception as e:
         print(f"Schema creation error: {e}", flush=True)
@@ -22,7 +22,6 @@ async def lifespan(app: FastAPI):
     yield
 
 
-
 app = FastAPI(title="Enrollment Service", lifespan=lifespan)
 
 app.include_router(router)
@@ -31,4 +30,3 @@ app.include_router(router)
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "enrollment_service"}
-

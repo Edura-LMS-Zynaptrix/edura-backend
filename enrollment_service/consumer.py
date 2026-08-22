@@ -5,12 +5,10 @@ import os
 import pika
 from database import SessionLocal
 from events import publish_enrollment_activated
-from models import Enrollment, EnrollmentStatus
 from services import activate_or_extend_enrollment, suspend_enrollment
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -30,8 +28,12 @@ def process_message(ch, method, properties, body):
                 student_id = data.get("student_id")
                 course_id = data.get("course_id")
                 if student_id and course_id:
-                    enrollment = activate_or_extend_enrollment(db, student_id, course_id)
-                    logger.info(f"Activated/Extended enrollment for student {student_id}, course {course_id}")
+                    enrollment = activate_or_extend_enrollment(
+                        db, student_id, course_id
+                    )
+                    logger.info(
+                        f"Activated/Extended enrollment for student {student_id}, course {course_id}"
+                    )
                     publish_enrollment_activated(
                         enrollment_id=enrollment.id,
                         student_id=enrollment.student_id,
@@ -43,7 +45,9 @@ def process_message(ch, method, properties, body):
                 course_id = data.get("course_id")
                 if student_id and course_id:
                     suspend_enrollment(db, student_id, course_id)
-                    logger.info(f"Suspended enrollment for student {student_id}, course {course_id}")
+                    logger.info(
+                        f"Suspended enrollment for student {student_id}, course {course_id}"
+                    )
             ch.basic_ack(delivery_tag=method.delivery_tag)
         finally:
             db.close()
@@ -62,22 +66,33 @@ def start_consumer():
                 )
             )
             channel = connection.channel()
-            channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="topic", durable=True)
+            channel.exchange_declare(
+                exchange=EXCHANGE_NAME, exchange_type="topic", durable=True
+            )
             channel.queue_declare(queue=QUEUE_NAME, durable=True)
-            channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key="payment.success")
-            channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key="subscription.expired")
+            channel.queue_bind(
+                exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key="payment.success"
+            )
+            channel.queue_bind(
+                exchange=EXCHANGE_NAME,
+                queue=QUEUE_NAME,
+                routing_key="subscription.expired",
+            )
 
             channel.basic_consume(queue=QUEUE_NAME, on_message_callback=process_message)
-            logger.info("Enrollment consumer started successfully. Listening on enrollment.queue...")
+            logger.info(
+                "Enrollment consumer started successfully. Listening on enrollment.queue..."
+            )
             channel.start_consuming()
             break
         except Exception as e:
-            logger.warning(f"Consumer failed to connect to RabbitMQ ({RABBITMQ_HOST}): {e}. Retrying in 5s...")
+            logger.warning(
+                f"Consumer failed to connect to RabbitMQ ({RABBITMQ_HOST}): {e}. Retrying in 5s..."
+            )
             import time
-            time.sleep(5)
 
+            time.sleep(5)
 
 
 if __name__ == "__main__":
     start_consumer()
-

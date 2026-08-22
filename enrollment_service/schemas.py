@@ -1,6 +1,7 @@
 from datetime import datetime
-from pydantic import BaseModel, Field
+
 from models import EnrollmentStatus
+from pydantic import BaseModel
 
 
 class EnrollmentBase(BaseModel):
@@ -28,4 +29,3 @@ class EnrollmentResponse(BaseModel):
         )
 
     model_config = {"from_attributes": True, "populate_by_name": True}
-

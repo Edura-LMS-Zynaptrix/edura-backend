@@ -20,7 +20,6 @@ def engine():
     engine.dispose()
 
 
-
 def clean_database(engine):
     # Drop all existing tables to start fresh
     metadata = MetaData()
