@@ -94,7 +94,7 @@ jobs:
         env:
           REDIS_HOST: localhost
           DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db_${{ matrix.service }}
-          PYTHONPATH: ${{ matrix.service }}
+          PYTHONPATH: .:${{ matrix.service }}
         run: |
           if [ -d "${{ matrix.service }}/tests" ]; then
             pytest ${{ matrix.service }} --cov=${{ matrix.service }} --cov-report=xml
