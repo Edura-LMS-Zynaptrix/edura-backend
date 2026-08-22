@@ -5,9 +5,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-# Setup test DB (SQLite in-memory)
-TEST_DATABASE_URL = "sqlite:///./test_enrollment_db.db"
+# Setup test DB (SQLite in-memory with StaticPool for thread isolation)
+TEST_DATABASE_URL = "sqlite://"
 
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
@@ -17,7 +18,11 @@ from database import Base, get_db
 from models import Enrollment, EnrollmentStatus
 
 # Create SQLite engine
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(
+    TEST_DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Patch SessionLocal in database module and consumer
@@ -50,11 +55,6 @@ def setup_db():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
-    if os.path.exists("./test_enrollment_db.db"):
-        try:
-            os.remove("./test_enrollment_db.db")
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
