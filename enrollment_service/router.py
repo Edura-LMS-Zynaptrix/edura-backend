@@ -1,10 +1,44 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
-from shared.auth import require_role
+from database import get_db
+from models import Enrollment, EnrollmentStatus
+from schemas import EnrollmentResponse
 
 router = APIRouter()
 
 
-@router.get("/enrollment")
-async def enrollment_only(_: None = Depends(require_role(["enrollment_manager"]))):
-    return {"message": "Welcome Enrollment Manager"}
+@router.get(
+    "/api/enrollments",
+    response_model=EnrollmentResponse,
+    status_code=status.HTTP_200_OK,
+)
+@router.get(
+    "/enrollments",
+    response_model=EnrollmentResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+def get_enrollment(
+    student_id: int = Query(..., description="ID of the student"),
+    course_id: int = Query(..., description="ID of the course"),
+    db: Session = Depends(get_db),
+):
+    """
+    Query enrollment status by student_id and course_id.
+    Exposed so other services (e.g., content_service) can verify student access.
+    """
+    enrollment = (
+        db.query(Enrollment)
+        .filter(
+            Enrollment.student_id == student_id,
+            Enrollment.course_id == course_id,
+        )
+        .first()
+    )
+    if not enrollment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Enrollment record not found for student and course",
+        )
+    return EnrollmentResponse.from_orm_model(enrollment)

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `enrollment_service`: consume `payment.success` RabbitMQ event and grant/revoke course access (DDP-#16)
+  - RabbitMQ Consumer (`consumer.py`) on queue `enrollment.queue` bound to exchange `edura.events`:
+    - Processes `payment.success` events to create or extend `ACTIVE` enrollments by 30 days and publishes `enrollment.activated` event.
+    - Processes `subscription.expired` events to update enrollment status to `SUSPENDED`.
+  - Endpoint `GET /api/enrollments` query endpoint returning enrollment status for external service access checks.
+  - Test suite (`tests/test_enrollment.py`) covering all acceptance criteria with 87% code coverage on `enrollment_service`.
 - `auth_service`: OAuth2 PKCE login, JWT management, Redis sessions, and OTP verification (DDP-#10)
   - `POST /api/auth/login` — validates user credentials, issues 15-minute access token and 7-day HttpOnly refresh token cookie, tracks Redis session.
   - `POST /api/auth/refresh` — refresh token rotation with reuse detection (`REFRESH_TOKEN_REUSE`).
