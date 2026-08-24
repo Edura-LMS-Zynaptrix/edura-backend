@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from email_service import render_email, send_email
+from email_service import send_email
 
 
 def test_send_email_smtp_dispatch():

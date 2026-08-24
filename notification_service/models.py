@@ -58,7 +58,9 @@ class NotificationLog(Base):
     __tablename__ = "notification_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    recipient_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    recipient_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, index=True
+    )
     recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     event_type: Mapped[NotificationEvent] = mapped_column(
         Enum(NotificationEvent, name="notificationevent"), nullable=False

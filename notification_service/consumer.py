@@ -114,7 +114,9 @@ def process_message(ch, method, properties, body):
             logger.info(f"Successfully processed {routing_key} for {email}")
 
         except Exception as smtp_err:
-            logger.error(f"SMTP delivery failed for {routing_key} to {email}: {smtp_err}")
+            logger.error(
+                f"SMTP delivery failed for {routing_key} to {email}: {smtp_err}"
+            )
             db.rollback()
 
             # Record failure in NotificationLog

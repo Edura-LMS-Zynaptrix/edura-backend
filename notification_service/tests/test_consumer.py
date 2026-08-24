@@ -253,4 +253,3 @@ def test_start_consumer():
         mock_channel.queue_declare.assert_called_once()
         assert mock_channel.queue_bind.call_count == 5
         mock_channel.start_consuming.assert_called_once()
-
