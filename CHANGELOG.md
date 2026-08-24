@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `assessment_service`: timed quiz sessions, Redis caching, MCQ auto-grading, and anti-cheat tab-switch detection (DDP-#17)
+  - `POST /api/assessments/{id}/start` — initializes timed session in Redis (`session:assessment:{session_id}`) with TTL equal to assessment time limit, prevents duplicate active sessions (409 Conflict), and returns shuffled questions with answer key obfuscated.
+  - `POST /api/assessments/{id}/submit` — auto-grades MCQ and True/False questions, flags Short Answer for manual review, handles auto-submit on timer expiry, updates DB `Submission` record, and publishes `assessment.graded` event to RabbitMQ.
+  - `POST /api/assessments/{id}/violations` — logs tab-switch and focus-lost anti-cheat events into `ViolationLog` table, returning 204 No Content.
+  - `assessment_service/tests/test_assessment.py` — unit and integration test suite achieving 84% overall code coverage on `assessment_service`.
 - `enrollment_service`: consume `payment.success` RabbitMQ event and grant/revoke course access (DDP-#16)
   - RabbitMQ Consumer (`consumer.py`) on queue `enrollment.queue` bound to exchange `edura.events`:
     - Processes `payment.success` events to create or extend `ACTIVE` enrollments by 30 days and publishes `enrollment.activated` event.
