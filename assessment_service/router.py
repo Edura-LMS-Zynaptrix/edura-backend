@@ -2,7 +2,6 @@ import json
 import random
 import uuid
 from datetime import datetime, timezone
-from typing import List
 
 from database import get_db
 from events import publish_assessment_graded
@@ -63,7 +62,9 @@ async def get_assessment(
 
 
 @router.post("/{assessment_id}/start", response_model=StartSessionResponse)
-@router.post("/api/assessments/{assessment_id}/start", response_model=StartSessionResponse)
+@router.post(
+    "/api/assessments/{assessment_id}/start", response_model=StartSessionResponse
+)
 async def start_assessment_session(
     assessment_id: int,
     db: Session = Depends(get_db),
@@ -115,9 +116,7 @@ async def start_assessment_session(
     # Generate session ID
     session_id = f"sess_{uuid.uuid4().hex}"
     time_limit_seconds = (
-        (assessment.time_limit_minutes * 60)
-        if assessment.time_limit_minutes
-        else 3600
+        (assessment.time_limit_minutes * 60) if assessment.time_limit_minutes else 3600
     )
 
     # Save session data to Redis
@@ -144,7 +143,11 @@ async def start_assessment_session(
         QuestionPublic(
             id=q.id,
             question_text=q.question_text,
-            question_type=q.question_type.value if hasattr(q.question_type, "value") else str(q.question_type),
+            question_type=(
+                q.question_type.value
+                if hasattr(q.question_type, "value")
+                else str(q.question_type)
+            ),
             options_json=q.options_json,
             marks=q.marks,
             position=q.position,
@@ -162,7 +165,9 @@ async def start_assessment_session(
 
 
 @router.post("/{assessment_id}/submit", response_model=SubmitAssessmentResponse)
-@router.post("/api/assessments/{assessment_id}/submit", response_model=SubmitAssessmentResponse)
+@router.post(
+    "/api/assessments/{assessment_id}/submit", response_model=SubmitAssessmentResponse
+)
 async def submit_assessment(
     assessment_id: int,
     body: SubmitAssessmentRequest,
@@ -204,7 +209,10 @@ async def submit_assessment(
         user_answer = answers_dict.get(q.id, "").strip()
 
         if q.question_type in (QuestionType.mcq, QuestionType.true_false):
-            if user_answer and user_answer.lower() == str(q.correct_answer).strip().lower():
+            if (
+                user_answer
+                and user_answer.lower() == str(q.correct_answer).strip().lower()
+            ):
                 obtained_marks += q.marks
                 correct_count += 1
         elif q.question_type == QuestionType.short_answer:
@@ -271,7 +279,10 @@ async def submit_assessment(
 
 
 @router.post("/{assessment_id}/violations", status_code=status.HTTP_204_NO_CONTENT)
-@router.post("/api/assessments/{assessment_id}/violations", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/api/assessments/{assessment_id}/violations",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 async def record_violation(
     assessment_id: int,
     body: ViolationRequest,

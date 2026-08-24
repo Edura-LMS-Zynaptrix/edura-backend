@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import patch
+
 import jwt
 import pytest
 from database import Base, get_db
@@ -17,13 +18,13 @@ from models import (
     Question,
     QuestionType,
     Submission,
-    SubmissionStatus,
     ViolationLog,
     ViolationType,
 )
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+
 from shared.auth import SECRET_KEY
 
 # In-memory SQLite for fast, isolated unit testing
@@ -259,11 +260,7 @@ def test_tab_switch_violation_ac4():
     assert v_res.status_code == 204
 
     db = TestingSessionLocal()
-    v_log = (
-        db.query(ViolationLog)
-        .filter(ViolationLog.student_id == 105)
-        .first()
-    )
+    v_log = db.query(ViolationLog).filter(ViolationLog.student_id == 105).first()
     assert v_log is not None
     assert v_log.violation_type == ViolationType.tab_switch
     db.close()

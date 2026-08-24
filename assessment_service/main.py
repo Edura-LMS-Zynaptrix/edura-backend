@@ -1,5 +1,5 @@
 import logging
-import models  # Register models with Base.metadata
+
 from database import Base, engine
 from fastapi import FastAPI
 from router import router

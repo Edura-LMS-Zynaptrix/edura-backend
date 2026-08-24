@@ -1,12 +1,11 @@
+import logging
 import os
 import sys
-import logging
 
 # Ensure auth_service and parent directory are in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import models  # Register models with Base.metadata
 from database import Base, engine
 from fastapi import FastAPI
 from router import router
