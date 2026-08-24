@@ -38,6 +38,8 @@ class NotificationEvent(str, enum.Enum):
     assessment_graded = "assessment_graded"
     certificate_issued = "certificate_issued"
     course_published = "course_published"
+    otp_requested = "otp_requested"
+    proctoring_violation = "proctoring_violation"
     general = "general"
 
 
@@ -56,7 +58,8 @@ class NotificationLog(Base):
     __tablename__ = "notification_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    recipient_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    recipient_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     event_type: Mapped[NotificationEvent] = mapped_column(
         Enum(NotificationEvent, name="notificationevent"), nullable=False
     )
@@ -82,6 +85,7 @@ class NotificationLog(Base):
     read_at: Mapped[DateTime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -93,7 +97,6 @@ class NotificationLog(Base):
     )
 
     __table_args__ = (
-        Index("ix_notification_logs_recipient_id", "recipient_id"),
         Index("ix_notification_logs_status", "status"),
         Index("ix_notification_logs_is_read", "is_read"),
     )

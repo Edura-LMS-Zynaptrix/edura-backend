@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Academic Integrity Alert - Edura</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .header { text-align: center; border-bottom: 2px solid #ef4444; padding-bottom: 15px; margin-bottom: 20px; }
+        .header h1 { color: #ef4444; margin: 0; font-size: 24px; }
+        .alert-box { background: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; margin: 20px 0; border-radius: 4px; }
+        .footer { margin-top: 30px; font-size: 12px; color: #6b7280; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Academic Integrity Alert</h1>
+        </div>
+        <p>Hello,</p>
+        <p>A proctoring anomaly or academic integrity violation alert was flagged for your assessment session.</p>
+        <div class="alert-box">
+            <strong>Violation Details:</strong> {{ violation_details | default("Suspicious activity detected during exam.") }}
+        </div>
+        <p>If you believe this alert was issued in error, please contact your course instructor or administrator.</p>
+        <div class="footer">
+            &copy; Edura Learning Platform. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>
