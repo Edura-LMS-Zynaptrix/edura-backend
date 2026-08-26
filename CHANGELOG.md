@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `notification_service`: RabbitMQ consumer for OTP, payment, certificate, and violation email dispatch via SMTP (DDP-#20)
+  - `consumer.py` — RabbitMQ worker consuming from `notification.queue` bound to exchange `edura.events` for routing keys `auth.otp-requested`, `payment.success`, `certificate.issued`, and `proctoring.violation`.
+  - `email_service.py` & `templates/` — Jinja2 HTML email rendering and SMTP email dispatch for `otp_email.html`, `payment_confirm.html`, `cert_issued.html`, and `violation_alert.html`.
+  - Fault tolerance & persistence — catches SMTP errors gracefully, records delivery failures as `NotificationLog(status=FAILED, error_message=...)`, and nacks messages (`requeue=True`) without crashing the consumer.
+  - Test suite (`test_templates.py`, `test_consumer.py`, `test_email_service.py`) achieving 92% code coverage on `notification_service`.
+- `assessment_service`: timed quiz sessions, Redis caching, MCQ auto-grading, and anti-cheat tab-switch detection (DDP-#17)
+  - `POST /api/assessments/{id}/start` — initializes timed session in Redis (`session:assessment:{session_id}`) with TTL equal to assessment time limit, prevents duplicate active sessions (409 Conflict), and returns shuffled questions with answer key obfuscated.
+  - `POST /api/assessments/{id}/submit` — auto-grades MCQ and True/False questions, flags Short Answer for manual review, handles auto-submit on timer expiry, updates DB `Submission` record, and publishes `assessment.graded` event to RabbitMQ.
+  - `POST /api/assessments/{id}/violations` — logs tab-switch and focus-lost anti-cheat events into `ViolationLog` table, returning 204 No Content.
+  - `assessment_service/tests/test_assessment.py` — unit and integration test suite achieving 84% overall code coverage on `assessment_service`.
+- `enrollment_service`: consume `payment.success` RabbitMQ event and grant/revoke course access (DDP-#16)
+  - RabbitMQ Consumer (`consumer.py`) on queue `enrollment.queue` bound to exchange `edura.events`:
+    - Processes `payment.success` events to create or extend `ACTIVE` enrollments by 30 days and publishes `enrollment.activated` event.
+    - Processes `subscription.expired` events to update enrollment status to `SUSPENDED`.
+  - Endpoint `GET /api/enrollments` query endpoint returning enrollment status for external service access checks.
+  - Test suite (`tests/test_enrollment.py`) covering all acceptance criteria with 87% code coverage on `enrollment_service`.
 - `auth_service`: OAuth2 PKCE login, JWT management, Redis sessions, and OTP verification (DDP-#10)
   - `POST /api/auth/login` — validates user credentials, issues 15-minute access token and 7-day HttpOnly refresh token cookie, tracks Redis session.
   - `POST /api/auth/refresh` — refresh token rotation with reuse detection (`REFRESH_TOKEN_REUSE`).

@@ -19,9 +19,10 @@ from sqlalchemy.sql import func
 
 
 class EnrollmentStatus(str, enum.Enum):
-    active = "active"
-    expired = "expired"
-    cancelled = "cancelled"
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ class Enrollment(Base):
     status: Mapped[EnrollmentStatus] = mapped_column(
         Enum(EnrollmentStatus, name="enrollmentstatus"),
         nullable=False,
-        default=EnrollmentStatus.active,
+        default=EnrollmentStatus.ACTIVE,
     )
     enrolled_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -68,7 +69,5 @@ class Enrollment(Base):
         UniqueConstraint(
             "student_id", "course_id", name="uq_enrollment_student_course"
         ),
-        Index("ix_enrollments_student_id", "student_id"),
-        Index("ix_enrollments_course_id", "course_id"),
         Index("ix_enrollments_status", "status"),
     )

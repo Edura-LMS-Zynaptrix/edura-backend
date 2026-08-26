@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Confirmation - Edura</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .header { text-align: center; border-bottom: 2px solid #10b981; padding-bottom: 15px; margin-bottom: 20px; }
+        .header h1 { color: #10b981; margin: 0; font-size: 24px; }
+        .details-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        .details-table td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
+        .details-table td.label { font-weight: bold; color: #4b5563; width: 40%; }
+        .footer { margin-top: 30px; font-size: 12px; color: #6b7280; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Payment Successful!</h1>
+        </div>
+        <p>Thank you for your enrollment with Edura. We have received your payment.</p>
+        <table class="details-table">
+            <tr>
+                <td class="label">Order ID:</td>
+                <td>{{ order_id }}</td>
+            </tr>
+            <tr>
+                <td class="label">Course Title:</td>
+                <td>{{ course_title }}</td>
+            </tr>
+            <tr>
+                <td class="label">Amount Paid:</td>
+                <td>${{ "%.2f"|format(amount | float) }}</td>
+            </tr>
+        </table>
+        <p>You can now access your course directly from your student dashboard.</p>
+        <div class="footer">
+            &copy; Edura Learning Platform. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

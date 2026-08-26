@@ -49,9 +49,9 @@ class LessonProgress(Base):
     __tablename__ = "lesson_progress"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    lesson_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    course_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    lesson_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     is_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     watch_duration_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
@@ -91,8 +91,8 @@ class CourseProgress(Base):
     __tablename__ = "course_progress"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    course_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[CourseProgressStatus] = mapped_column(
         Enum(CourseProgressStatus, name="courseprogressstatus"),
         nullable=False,
@@ -136,8 +136,8 @@ class Certificate(Base):
     __tablename__ = "certificates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    course_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     certificate_url: Mapped[str] = mapped_column(String(512), nullable=False)
     issued_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -171,8 +171,8 @@ class LeaderboardEntry(Base):
     __tablename__ = "leaderboard_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    course_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     points: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     streak_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

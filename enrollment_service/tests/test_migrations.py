@@ -13,8 +13,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 @pytest.fixture(scope="module")
 def engine():
-    if not DATABASE_URL:
-        pytest.skip("DATABASE_URL not set in environment")
+    if not DATABASE_URL or not DATABASE_URL.startswith("postgresql"):
+        pytest.skip("PostgreSQL DATABASE_URL not set in environment")
     engine = create_engine(DATABASE_URL)
     yield engine
     engine.dispose()
