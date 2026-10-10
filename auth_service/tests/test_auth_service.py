@@ -86,7 +86,7 @@ def test_register_and_login_success():
         "/register",
         json={
             "email": "student@edura.com",
-            "password": "password123",
+            "password": "Password@123",
             "role": "student",
         },
     )
@@ -97,7 +97,7 @@ def test_register_and_login_success():
     # Login user
     login_resp = client.post(
         "/login",
-        json={"email": "student@edura.com", "password": "password123"},
+        json={"email": "student@edura.com", "password": "Password@123"},
     )
     assert login_resp.status_code == 200
     token_data = login_resp.json()
@@ -111,7 +111,7 @@ def test_login_invalid_credentials():
         "/register",
         json={
             "email": "teacher@edura.com",
-            "password": "password123",
+            "password": "Password@123",
             "role": "teacher",
         },
     )
@@ -128,11 +128,11 @@ def test_refresh_token_rotation_and_reuse():
     # Register & Login
     client.post(
         "/register",
-        json={"email": "admin@edura.com", "password": "password123", "role": "admin"},
+        json={"email": "admin@edura.com", "password": "Password@123", "role": "admin"},
     )
     login_resp = client.post(
         "/login",
-        json={"email": "admin@edura.com", "password": "password123"},
+        json={"email": "admin@edura.com", "password": "Password@123"},
     )
     initial_refresh_token = login_resp.cookies["refresh_token"]
 
@@ -152,11 +152,11 @@ def test_protected_route_role_enforcement():
     # Register Student
     client.post(
         "/register",
-        json={"email": "user@edura.com", "password": "password123", "role": "student"},
+        json={"email": "user@edura.com", "password": "Password@123", "role": "student"},
     )
     login_resp = client.post(
         "/login",
-        json={"email": "user@edura.com", "password": "password123"},
+        json={"email": "user@edura.com", "password": "Password@123"},
     )
     access_token = login_resp.json()["access_token"]
 
@@ -177,3 +177,95 @@ def test_missing_and_expired_token():
     resp_no_token = client.get("/protected")
     assert resp_no_token.status_code == 401
     assert resp_no_token.json()["detail"]["error"] == "MISSING_TOKEN"
+
+
+def test_register_rejects_weak_password():
+    resp = client.post(
+        "/register", json={"email": "weak@edura.com", "password": "password123"}
+    )
+    assert resp.status_code == 422
+
+
+def _request_reset(email: str):
+    from unittest.mock import patch
+
+    with patch("router.publish_event") as publish:
+        resp = client.post("/forgot-password", json={"email": email})
+    return resp, publish
+
+
+def test_forgot_password_does_not_reveal_unknown_emails():
+    client.post("/register", json={"email": "known@edura.com", "password": "Password@123"})
+    known, published = _request_reset("known@edura.com")
+    unknown, not_published = _request_reset("nobody@edura.com")
+
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == unknown.json()
+    published.assert_called_once()
+    not_published.assert_not_called()
+
+    routing_key, payload = published.call_args.args
+    assert routing_key == "auth.password-reset-requested"
+    assert payload["email"] == "known@edura.com"
+    assert "/reset-password?token=" in payload["reset_url"]
+
+
+def test_reset_password_flow_is_single_use_and_signs_out():
+    email = "reset@edura.com"
+    client.post("/register", json={"email": email, "password": "Password@123"})
+    old_refresh = client.post(
+        "/login", json={"email": email, "password": "Password@123"}
+    ).cookies["refresh_token"]
+
+    _, published = _request_reset(email)
+    token = published.call_args.args[1]["reset_url"].split("token=", 1)[1]
+
+    mismatch = client.post(
+        "/reset-password",
+        json={"token": token, "new_password": "NewPass@456", "confirm_password": "Other@456"},
+    )
+    assert mismatch.status_code == 422
+
+    from unittest.mock import patch
+
+    with patch("router.publish_event"):
+        ok = client.post(
+            "/reset-password",
+            json={"token": token, "new_password": "NewPass@456", "confirm_password": "NewPass@456"},
+        )
+    assert ok.status_code == 200
+
+    assert client.post("/login", json={"email": email, "password": "Password@123"}).status_code == 401
+    assert client.post("/login", json={"email": email, "password": "NewPass@456"}).status_code == 200
+
+    # The link can't be replayed, and sessions from before the reset are gone.
+    replay = client.post(
+        "/reset-password",
+        json={"token": token, "new_password": "Again@789", "confirm_password": "Again@789"},
+    )
+    assert replay.status_code == 400
+    assert replay.json()["detail"]["error"] == "INVALID_RESET_TOKEN"
+    assert client.post("/refresh", json={"refresh_token": old_refresh}).status_code == 401
+
+
+def test_reset_password_rejects_garbage_token():
+    resp = client.post(
+        "/reset-password",
+        json={"token": "not-a-token", "new_password": "NewPass@456", "confirm_password": "NewPass@456"},
+    )
+    assert resp.status_code == 400
+
+
+def test_logout_revokes_refresh_token():
+    email = "logout@edura.com"
+    client.post("/register", json={"email": email, "password": "Password@123"})
+    refresh = client.post(
+        "/login", json={"email": email, "password": "Password@123"}
+    ).cookies["refresh_token"]
+
+    client.cookies.set("refresh_token", refresh)
+    resp = client.post("/logout")
+    client.cookies.clear()
+
+    assert resp.status_code == 200
+    assert client.post("/refresh", json={"refresh_token": refresh}).status_code == 401

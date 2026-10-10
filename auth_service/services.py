@@ -138,6 +138,21 @@ class TokenService:
         new_token_str = TokenService.create_refresh_token(db, db_token.user_id)
         return db_token.user_id, new_token_str
 
+    @staticmethod
+    def revoke_refresh_token(db: Session, token_str: str) -> None:
+        token_hash = hashlib.sha256(token_str.encode()).hexdigest()
+        db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).update(
+            {RefreshToken.is_revoked: True}
+        )
+        db.commit()
+
+    @staticmethod
+    def revoke_all_for_user(db: Session, user_id: int) -> None:
+        db.query(RefreshToken).filter(
+            RefreshToken.user_id == user_id, RefreshToken.is_revoked.is_(False)
+        ).update({RefreshToken.is_revoked: True})
+        db.commit()
+
 
 class GoogleAuthService:
     """
@@ -173,8 +188,59 @@ class GoogleAuthService:
             return None
 
 
+class PasswordResetService:
+    """
+    Stateless reset links: a signed JWT that also carries a fingerprint of the
+    current password hash, so the link stops working once it has been used
+    (or the password changes some other way) — no token table needed.
+    """
+
+    PURPOSE = "password_reset"
+
+    @staticmethod
+    def _fingerprint(hashed_password: Optional[str]) -> str:
+        return hashlib.sha256((hashed_password or "no-password").encode()).hexdigest()[:16]
+
+    @staticmethod
+    def create_token(user_id: int, hashed_password: Optional[str]) -> str:
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": str(user_id),
+            "purpose": PasswordResetService.PURPOSE,
+            "pwd": PasswordResetService._fingerprint(hashed_password),
+            "iat": now,
+            "exp": now + timedelta(minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES),
+        }
+        return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+    @staticmethod
+    def read_token(token: str) -> Optional[Tuple[int, str]]:
+        """Returns (user_id, password fingerprint) or None when invalid/expired."""
+        try:
+            data = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        except jwt.PyJWTError:
+            return None
+        if data.get("purpose") != PasswordResetService.PURPOSE:
+            return None
+        try:
+            return int(data["sub"]), str(data.get("pwd", ""))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def matches(hashed_password: Optional[str], fingerprint: str) -> bool:
+        return secrets.compare_digest(
+            PasswordResetService._fingerprint(hashed_password), fingerprint
+        )
+
+
 class SessionService:
     MAX_SESSIONS = 3
+
+    @staticmethod
+    def delete_all(user_id: int) -> None:
+        for key in redis_client.keys(f"session:{user_id}:*"):
+            redis_client.delete(key)
 
     @staticmethod
     def create_session(user_id: int, role: str) -> str:

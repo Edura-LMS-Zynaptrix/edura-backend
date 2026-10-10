@@ -78,6 +78,9 @@ class UserProfileUpdate(BaseModel):
     stream_id: Optional[int] = None
     nic_number: Optional[str] = None
     selected_subjects: Optional[list[str]] = None
+    # A code *entered* by this user (someone else's). Applied only if they
+    # haven't been referred yet; it never replaces their own referral_code.
+    referral_code: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("mobile_no")
     @classmethod
@@ -146,6 +149,7 @@ class InternalProfileCreateRequest(BaseModel):
     role: str
     first_name: str
     last_name: str
+    avatar_url: Optional[str] = None
 
 
 class RoleStatsResponse(BaseModel):
@@ -202,3 +206,7 @@ class GradeSubjectResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ReferralApplyRequest(BaseModel):
+    referral_code: str = Field(..., min_length=1, max_length=32)

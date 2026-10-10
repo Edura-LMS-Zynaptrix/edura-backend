@@ -68,6 +68,10 @@ class UserProfile(Base):
     # is set once, at profile creation, from the code the new user entered ────
     referral_code: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
     referred_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Earned when someone you referred first enrolls (display-only, as in the reference platform).
+    wallet_credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_credits_earned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_successful_referrals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -120,3 +124,43 @@ class GradeSubject(Base):
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ReferralEvent(Base):
+    """
+    One referral: created "pending" when a code is applied, flipped to
+    "credited" when the referred student first enrolls in a course.
+    A user can only ever be referred once (referred_user_id is unique).
+    """
+
+    __tablename__ = "referral_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    referrer_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    referred_user_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    credit_amount: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    qualified_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    credited_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class WalletTransaction(Base):
+    """Ledger of credit changes, so a balance can always be explained."""
+
+    __tablename__ = "wallet_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    transaction_type: Mapped[str] = mapped_column(String(30), nullable=False)  # referral_reward | manual_adjustment | spend
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+

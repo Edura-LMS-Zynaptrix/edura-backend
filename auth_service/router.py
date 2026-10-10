@@ -6,19 +6,29 @@ from schemas import (
     ChangePasswordRequest,
     CreateAdminRequest,
     CurrentUserResponse,
+    ForgotPasswordRequest,
     GoogleLoginRequest,
     InternalUserResponse,
     LoginRequest,
     OtpRequest,
     OtpVerifyRequest,
     RefreshRequest,
+    ResetPasswordRequest,
     SetPasswordRequest,
     TokenResponse,
     UserRegisterRequest,
     UserResponse,
     UserStatusUpdateRequest,
 )
-from services import GoogleAuthService, OtpService, SessionService, TokenService
+from config import settings
+from events import publish_event
+from services import (
+    GoogleAuthService,
+    OtpService,
+    PasswordResetService,
+    SessionService,
+    TokenService,
+)
 from sqlalchemy.orm import Session
 from user_client import create_profile_internal
 
@@ -279,7 +289,7 @@ def refresh(
 
 
 @router.post("/google", response_model=TokenResponse)
-def google_login(req: GoogleLoginRequest, response: Response, db: Session = Depends(get_db)):
+async def google_login(req: GoogleLoginRequest, response: Response, db: Session = Depends(get_db)):
     """
     Sign in (or sign up) with Google. Unifies with an existing email+password
     account: looked up by google_id first, then by email — if a password
@@ -319,6 +329,16 @@ def google_login(req: GoogleLoginRequest, response: Response, db: Session = Depe
         db.add(user)
         db.commit()
         db.refresh(user)
+        # Seed the profile from Google, as the reference platform does, so
+        # complete-profile only has to collect the academic details.
+        first_name, _, last_name = (google_info.get("full_name") or "").strip().partition(" ")
+        await create_profile_internal(
+            user.id,
+            "student",
+            first_name or email.split("@")[0],
+            last_name.strip(),
+            avatar_url=google_info.get("picture") or None,
+        )
 
     if not user.is_active:
         raise HTTPException(
@@ -416,6 +436,72 @@ def change_password(
     ).decode("utf-8")
     db.commit()
     return {"message": "Password updated successfully"}
+
+
+_RESET_REQUESTED_MESSAGE = (
+    "If an account with that email exists, a password reset link has been sent."
+)
+
+
+@router.post("/forgot-password")
+def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """Emails a one-hour reset link. Same response either way, so emails can't be probed."""
+    user = db.query(User).filter(User.email == req.email).first()
+    if user and user.is_active:
+        token = PasswordResetService.create_token(user.id, user.hashed_password)
+        publish_event(
+            "auth.password-reset-requested",
+            {
+                "user_id": user.id,
+                "email": user.email,
+                "reset_url": f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={token}",
+                "expires_in_minutes": settings.PASSWORD_RESET_EXPIRE_MINUTES,
+            },
+        )
+    return {"message": _RESET_REQUESTED_MESSAGE}
+
+
+@router.post("/reset-password")
+def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+    invalid = HTTPException(
+        status_code=400,
+        detail={
+            "error": "INVALID_RESET_TOKEN",
+            "message": "Invalid or expired reset link. Please request a new one.",
+        },
+    )
+    parsed = PasswordResetService.read_token(req.token)
+    if not parsed:
+        raise invalid
+    user_id, fingerprint = parsed
+    user = db.query(User).filter(User.id == user_id).first()
+    # The fingerprint changes with the password, so a used link can't be replayed.
+    if not user or not user.is_active or not PasswordResetService.matches(user.hashed_password, fingerprint):
+        raise invalid
+
+    user.hashed_password = bcrypt.hashpw(
+        req.new_password.encode("utf-8"), bcrypt.gensalt()
+    ).decode("utf-8")
+    db.commit()
+
+    # Anyone holding an old session is signed out.
+    TokenService.revoke_all_for_user(db, user.id)
+    SessionService.delete_all(user.id)
+    publish_event("auth.password-changed", {"user_id": user.id, "email": user.email})
+    return {"message": "Password reset successfully. You can now log in."}
+
+
+@router.post("/logout")
+def logout(
+    response: Response,
+    refresh_token: str = Cookie(None),
+    db: Session = Depends(get_db),
+):
+    """Revokes this browser's refresh token and clears its cookie."""
+    if refresh_token:
+        TokenService.revoke_refresh_token(db, refresh_token)
+    response.delete_cookie("refresh_token", httponly=True, secure=True, samesite="lax")
+    return {"message": "Successfully logged out"}
 
 
 @router.post("/otp/request")

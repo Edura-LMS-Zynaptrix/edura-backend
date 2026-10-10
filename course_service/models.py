@@ -1,7 +1,7 @@
 """
 course_service/models.py
 SQLAlchemy 2.0 ORM models for the Course Service.
-Entities: Course, Module, Lesson
+Entities: Course, Module, Lesson, Material, VideoCheckpoint, CheckpointQuestion
 Matches ER diagram: course entity (desc_name, instructor/teacher relationship),
 module structure, and lesson hierarchy.
 """
@@ -88,8 +88,9 @@ class Course(Base):
 
 class Module(Base):
     """
-    A named section/chapter within a course.
-    Ordered by position for display.
+    A lesson-group inside a course (shown to users as a "Lesson").
+    Video courses hang videos (Lesson rows) and materials off it; exam
+    courses hang assessments (assessment_service, by module_id) off it.
     """
 
     __tablename__ = "modules"
@@ -98,6 +99,9 @@ class Module(Base):
     course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_public_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -125,6 +129,7 @@ class Lesson(Base):
     module_id: Mapped[int] = mapped_column(Integer, nullable=False)
     course_id: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     lesson_type: Mapped[LessonType] = mapped_column(
         Enum(LessonType, name="lessontype"), nullable=False, default=LessonType.video
     )
@@ -151,3 +156,67 @@ class Lesson(Base):
         Index("ix_lessons_module_id", "module_id"),
         Index("ix_lessons_course_id", "course_id"),
     )
+
+
+class Material(Base):
+    """
+    A downloadable resource (Cloudinary-hosted) inside a module, optionally
+    pinned to one video (lesson_id). Several materials may share a video.
+    """
+
+    __tablename__ = "materials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    module_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    lesson_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    file_public_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_materials_module_id", "module_id"),
+        Index("ix_materials_lesson_id", "lesson_id"),
+    )
+
+
+class VideoCheckpoint(Base):
+    """A pause point inside a video (lesson) where the player asks practice questions."""
+
+    __tablename__ = "video_checkpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    lesson_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    timestamp_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_video_checkpoints_lesson_id", "lesson_id"),)
+
+
+class CheckpointQuestion(Base):
+    """An ungraded MCQ shown at a checkpoint; options a-b required, c-e optional."""
+
+    __tablename__ = "checkpoint_questions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    checkpoint_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    option_a: Mapped[str] = mapped_column(String(500), nullable=False)
+    option_b: Mapped[str] = mapped_column(String(500), nullable=False)
+    option_c: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    option_d: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    option_e: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    correct_option: Mapped[str] = mapped_column(String(1), nullable=False)  # a-e
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    order_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (Index("ix_checkpoint_questions_checkpoint_id", "checkpoint_id"),)
+

@@ -6,6 +6,7 @@ from database import get_db
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from models import GradeSubject, ProfileRole, Stream, UserProfile
 from schemas import (
+    ReferralApplyRequest,
     GradeSubjectCreate,
     GradeSubjectResponse,
     GradeSubjectUpdate,
@@ -20,6 +21,10 @@ from schemas import (
     UserProfileResponse,
     UserProfileUpdate,
 )
+from referrals import apply_code as apply_referral_code
+from referrals import bind_referral, find_referrer
+from referrals import events_for as referral_events_for
+from referrals import summary as referral_summary_of
 from sqlalchemy.orm import Session
 
 from shared.auth import require_role
@@ -134,16 +139,8 @@ async def create_own_profile(
             detail={"error": "PROFILE_EXISTS", "message": "Profile already exists for this user"},
         )
 
-    referred_by_user_id = None
-    if body.referral_code:
-        referrer = (
-            db.query(UserProfile)
-            .filter(UserProfile.referral_code == body.referral_code.strip().upper())
-            .first()
-        )
-        if referrer:
-            referred_by_user_id = referrer.user_id
-        # An unrecognised code is ignored rather than blocking registration.
+    # An unrecognised code is ignored rather than blocking registration.
+    referrer = find_referrer(db, body.referral_code)
 
     profile = UserProfile(
         user_id=requester_id,
@@ -162,9 +159,10 @@ async def create_own_profile(
         nic_number=body.nic_number,
         selected_subjects=body.selected_subjects,
         referral_code=_generate_referral_code(db, body.first_name),
-        referred_by_user_id=referred_by_user_id,
     )
     db.add(profile)
+    if referrer:
+        bind_referral(db, profile, referrer)
     db.commit()
     db.refresh(profile)
 
@@ -175,11 +173,10 @@ async def create_own_profile(
 @router.post("/internal/create-profile", response_model=UserProfileResponse, status_code=status.HTTP_201_CREATED)
 async def create_profile_internal(body: InternalProfileCreateRequest, db: Session = Depends(get_db)):
     """
-    Unauthenticated, service-to-service only (mirrors /owner-style internal
-    endpoints elsewhere). Called by auth_service right after it creates a
-    privileged admin account on behalf of another admin — that flow has no
-    JWT for the new user to self-service a profile with, unlike normal
-    register->login->createProfile.
+    Unauthenticated, service-to-service only (blocked at the gateway). Called
+    by auth_service when it creates an account itself: an admin made by
+    another admin, or a first-time Google sign-in (seeded with the Google
+    name and photo; the student adds academic details on complete-profile).
     """
     existing = db.query(UserProfile).filter(UserProfile.user_id == body.user_id).first()
     if existing:
@@ -195,6 +192,7 @@ async def create_profile_internal(body: InternalProfileCreateRequest, db: Sessio
         role=role,
         first_name=body.first_name,
         last_name=body.last_name,
+        avatar_url=body.avatar_url,
         referral_code=_generate_referral_code(db, body.first_name),
     )
     db.add(profile)
@@ -344,6 +342,103 @@ async def get_subjects_for_grade(
     return [r.name for r in rows]
 
 
+def _own_profile(payload: dict, db: Session) -> UserProfile:
+    profile = db.query(UserProfile).filter(UserProfile.user_id == int(payload["sub"])).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail={"error": "PROFILE_NOT_FOUND"})
+    return profile
+
+
+@router.get("/referral/summary")
+async def referral_summary(
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """The caller's code, share link and wallet totals."""
+    return referral_summary_of(_own_profile(payload, db))
+
+
+@router.get("/referral/events")
+async def referral_events(
+    limit: int = Query(50, ge=1, le=200),
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Students who signed up with the caller's code."""
+    return referral_events_for(db, int(payload["sub"]), limit)
+
+
+@router.post("/referral/apply")
+async def referral_apply(
+    body: ReferralApplyRequest,
+    payload: dict = Depends(require_role(["student"])),
+    db: Session = Depends(get_db),
+):
+    return apply_referral_code(db, _own_profile(payload, db), body.referral_code)
+
+
+@router.get("/internal/students")
+async def students_internal(
+    grades: str | None = Query(None, description="Comma-separated grades; omit for all"),
+    search: str | None = Query(None, max_length=100),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    """Service-to-service only (blocked at the gateway): student picker for admin access grants."""
+    q = db.query(UserProfile).filter(UserProfile.role == ProfileRole.student)
+    if grades:
+        try:
+            wanted = [int(g) for g in grades.split(",") if g.strip()]
+        except ValueError:
+            raise HTTPException(status_code=422, detail={"error": "INVALID_GRADES"})
+        q = q.filter(UserProfile.grade.in_(wanted))
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        q = q.filter(
+            (UserProfile.first_name.ilike(term))
+            | (UserProfile.last_name.ilike(term))
+            | (UserProfile.school.ilike(term))
+        )
+    return [
+        {
+            "user_id": str(p.user_id),
+            "full_name": f"{p.first_name} {p.last_name}".strip(),
+            "grade": p.grade,
+            "district": p.district,
+            "school": p.school,
+        }
+        for p in q.order_by(UserProfile.first_name, UserProfile.last_name).limit(limit).all()
+    ]
+
+
+@router.get("/internal/names")
+async def profile_names_internal(
+    ids: str = Query(..., description="Comma-separated auth user ids"),
+    db: Session = Depends(get_db),
+):
+    """Service-to-service only (blocked at the gateway): {user_id: display name}."""
+    try:
+        wanted = [int(x) for x in ids.split(",") if x.strip()][:500]
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_IDS"})
+    rows = (
+        db.query(UserProfile.user_id, UserProfile.first_name, UserProfile.last_name)
+        .filter(UserProfile.user_id.in_(wanted))
+        .all()
+    )
+    return {str(uid): f"{first} {last}".strip() for uid, first, last in rows}
+
+
+@router.get("/internal/stats", response_model=RoleStatsResponse)
+async def get_role_stats_internal(db: Session = Depends(get_db)):
+    """Service-to-service only (blocked at the gateway): analytics_service's public homepage stats."""
+    return RoleStatsResponse(
+        total_students=db.query(UserProfile).filter(UserProfile.role == ProfileRole.student).count(),
+        total_teachers=db.query(UserProfile).filter(UserProfile.role == ProfileRole.teacher).count(),
+        total_admins=db.query(UserProfile).filter(UserProfile.role == ProfileRole.admin).count(),
+    )
+
+
 @router.get("/stats", response_model=RoleStatsResponse)
 async def get_role_stats(
     payload: dict = Depends(require_role(["admin"])),
@@ -412,7 +507,13 @@ async def update_user(
     if not profile:
         raise HTTPException(status_code=404, detail={"error": "USER_NOT_FOUND"})
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    # An unrecognised code (or the user's own) is ignored, as at registration.
+    referrer = find_referrer(db, updates.pop("referral_code", None))
+    if referrer:
+        bind_referral(db, profile, referrer)
+
+    for field, value in updates.items():
         setattr(profile, field, value)
 
     db.commit()

@@ -2,6 +2,7 @@ import logging
 
 from database import Base, engine
 from fastapi import FastAPI
+from chat_router import router as chat_router
 from router import router
 
 logger = logging.getLogger(__name__)
@@ -9,6 +10,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Admin Service")
 
 app.include_router(router)
+app.include_router(chat_router)
 
 
 @app.on_event("startup")

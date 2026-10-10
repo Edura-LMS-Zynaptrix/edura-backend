@@ -1,8 +1,24 @@
+import re
 from datetime import datetime
 from typing import Optional
 
 from models import OtpPurpose, UserRole
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+
+
+def check_password_strength(password: str) -> str:
+    """Same rule the registration form shows: 8+ chars, upper, lower, digit, special."""
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters long")
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("Password must contain at least one uppercase letter")
+    if not re.search(r"[a-z]", password):
+        raise ValueError("Password must contain at least one lowercase letter")
+    if not re.search(r"\d", password):
+        raise ValueError("Password must contain at least one number")
+    if not re.search(r"[@$!%*?&#]", password):
+        raise ValueError("Password must contain at least one special character (@$!%*?&#)")
+    return password
 
 
 class LoginRequest(BaseModel):
@@ -35,6 +51,11 @@ class UserRegisterRequest(BaseModel):
     email: EmailStr
     password: str
     role: UserRole = UserRole.student
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        return check_password_strength(v)
 
 
 class UserResponse(BaseModel):
@@ -79,10 +100,41 @@ class SetPasswordRequest(BaseModel):
 
     new_password: str = Field(..., min_length=8)
 
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        return check_password_strength(v)
+
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        return check_password_strength(v)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8)
+    confirm_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        return check_password_strength(v)
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "ResetPasswordRequest":
+        if self.new_password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        return self
 
 
 # ── Admin management (admin-only; never reachable from public /register) ────

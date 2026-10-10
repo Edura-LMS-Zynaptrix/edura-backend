@@ -70,3 +70,36 @@ class ReceiptAdminResponse(BaseModel):
 class ReceiptVerifyRequest(BaseModel):
     status: Literal["verified", "rejected"]
     rejection_reason: Optional[str] = None
+
+
+class BankAccountCreate(BaseModel):
+    bank_name: str = Field(..., min_length=1, max_length=120)
+    account_number: str = Field(..., min_length=1, max_length=60)
+    account_name: str = Field(..., min_length=1, max_length=160)
+    branch: str = Field(..., min_length=1, max_length=120)
+    is_active: bool = True
+    order_number: int = 0
+
+
+class BankAccountUpdate(BaseModel):
+    bank_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    account_number: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    account_name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    branch: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    is_active: Optional[bool] = None
+    order_number: Optional[int] = None
+
+
+class BankAccountResponse(BaseModel):
+    id: int
+    bank_name: str
+    account_number: str
+    account_name: str
+    branch: str
+    is_active: bool
+    order_number: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+

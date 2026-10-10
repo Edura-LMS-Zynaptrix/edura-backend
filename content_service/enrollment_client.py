@@ -8,6 +8,7 @@ ENROLLMENT_SERVICE_URL = os.getenv(
 
 
 async def is_enrolled(student_id: int, course_id: int) -> bool:
+    """enrollment_service returns one enrollment object (404 when none)."""
     url = f"{ENROLLMENT_SERVICE_URL}/enrollments"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -16,8 +17,6 @@ async def is_enrolled(student_id: int, course_id: int) -> bool:
             )
         if r.status_code != 200:
             return False
-        data = r.json()
-        items = data if isinstance(data, list) else data.get("items", [])
-        return any(e.get("status") == "active" for e in items)
+        return str(r.json().get("status", "")).upper() == "ACTIVE"
     except Exception:
         return False

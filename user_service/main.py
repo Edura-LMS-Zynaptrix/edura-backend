@@ -1,8 +1,10 @@
 import logging
+import threading
 
 from database import Base, SessionLocal, engine
 from fastapi import FastAPI
 from models import GradeSubject, Stream
+from referral_consumer import start_referral_consumer
 from router import router
 from sqlalchemy import text
 
@@ -60,6 +62,9 @@ _COLUMN_MIGRATIONS = (
     "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS referral_code VARCHAR(20)",
     "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS referred_by_user_id INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_user_profiles_referral_code ON user_profiles (referral_code)",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS wallet_credits INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS total_credits_earned INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS total_successful_referrals INTEGER NOT NULL DEFAULT 0",
 )
 
 
@@ -83,6 +88,9 @@ def on_startup():
         logger.error(f"Error applying column migrations on startup: {e}")
 
     _seed_reference_data()
+
+    # Credits referrers when enrollment_service reports a first enrollment.
+    threading.Thread(target=start_referral_consumer, daemon=True).start()
 
 
 @app.get("/health")

@@ -1,19 +1,36 @@
+import csv
+import io
 import json
+import logging
 import random
 import uuid
 from datetime import datetime, timezone
 
-from course_client import get_course_instructor_id
+from course_client import get_course_instructor_id, get_course_titles
 from database import get_db
+from badges import evaluate_after_attempt
+from bulk_import import apply_question_images, bulk_import, import_question_rows, safe_zip, template_zip
+from enrollment_client import is_enrolled
 from events import publish_assessment_graded
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from models import (
     Assessment,
+    Badge,
     AssessmentType,
     Question,
     QuestionType,
     Submission,
     SubmissionStatus,
+    UserBadge,
     ViolationLog,
     ViolationType,
 )
@@ -22,20 +39,32 @@ from schemas import (
     AssessmentCreate,
     AssessmentResponse,
     AssessmentUpdate,
+    AttemptRanking,
+    BadgeDashboardResponse,
+    BadgeResponse,
+    AttemptReviewResponse,
+    CsvImportResult,
+    MyAttemptItem,
+    MyAttemptSummary,
     QuestionAdminResponse,
     QuestionCreate,
     QuestionPublic,
     QuestionUpdate,
     ReviewItem,
+    ReviewOption,
     StartSessionResponse,
     SubmissionRanking,
     SubmitAssessmentRequest,
     SubmitAssessmentResponse,
+    UserBadgeResponse,
     ViolationRequest,
 )
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from shared.auth import get_optional_payload, require_role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -65,17 +94,71 @@ def _build_review(questions: list[Question], answers_dict: dict) -> list[ReviewI
             and bool(user_answer)
             and user_answer.lower() == str(q.correct_answer).strip().lower()
         )
+        try:
+            option_texts = json.loads(q.options_json) if q.options_json else []
+        except (ValueError, TypeError):
+            option_texts = []
+        images = _option_images(q, len(option_texts))
         review.append(
             ReviewItem(
                 question_id=q.id,
                 question_text=q.question_text,
-                explanation=None,
+                question_image_url=q.question_image_url,
+                explanation=q.explanation,
                 selected_option_id=user_answer or None,
                 correct_option_id=str(q.correct_answer),
                 is_correct=is_correct,
+                options=[
+                    ReviewOption(
+                        id=text,
+                        option_text=text,
+                        option_image_url=img["url"] if img else None,
+                        order_number=idx,
+                    )
+                    for idx, (text, img) in enumerate(zip(option_texts, images))
+                ],
             )
         )
     return review
+
+
+def _answers_of(submission: Submission) -> dict[int, str]:
+    answers: dict[int, str] = {}
+    if submission.answers_json:
+        try:
+            for a in json.loads(submission.answers_json):
+                answers[int(a["question_id"])] = a.get("selected_option") or ""
+        except (ValueError, TypeError, KeyError):
+            pass
+    return answers
+
+
+def _correct_count(questions: list[Question], answers: dict[int, str]) -> int:
+    return sum(
+        1
+        for q in questions
+        if q.question_type in (QuestionType.mcq, QuestionType.true_false)
+        and (answers.get(q.id) or "").strip().lower() == str(q.correct_answer).strip().lower()
+    )
+
+
+def _time_taken(submission: Submission) -> int:
+    if submission.started_at and submission.submitted_at:
+        return max(0, int((submission.submitted_at - submission.started_at).total_seconds()))
+    return 0
+
+
+def _overall_rank(assessment_id: int, score: float, db: Session) -> int:
+    return (
+        db.query(Submission)
+        .filter(
+            Submission.assessment_id == assessment_id,
+            Submission.status == SubmissionStatus.graded,
+            Submission.score > score,
+        )
+        .count()
+        + 1
+    )
 
 
 def _get_question_or_404(question_id: int, db: Session) -> Question:
@@ -100,6 +183,73 @@ async def _assert_course_owner(course_id: int, requester_id: int, requester_role
         raise HTTPException(status_code=403, detail={"error": "NOT_COURSE_OWNER"})
 
 
+def _is_public_viewer(payload: dict | None) -> bool:
+    return not payload or payload.get("role", "").lower() == "student"
+
+
+def _question_counts(assessment_ids: list[int], db: Session) -> dict[int, int]:
+    if not assessment_ids:
+        return {}
+    return dict(
+        db.query(Question.assessment_id, func.count(Question.id))
+        .filter(Question.assessment_id.in_(assessment_ids))
+        .group_by(Question.assessment_id)
+        .all()
+    )
+
+
+def _to_response(a: Assessment, question_count: int | None = None, db: Session | None = None) -> AssessmentResponse:
+    if question_count is None and db is not None:
+        question_count = _question_counts([a.id], db).get(a.id, 0)
+    return AssessmentResponse(
+        id=a.id,
+        course_id=a.course_id,
+        module_id=a.module_id,
+        lesson_id=a.lesson_id,
+        title=a.title,
+        description=a.description,
+        assessment_type=(
+            a.assessment_type.value if hasattr(a.assessment_type, "value") else a.assessment_type
+        ),
+        time_limit_minutes=a.time_limit_minutes,
+        max_score=a.max_score,
+        pass_score=a.pass_score,
+        is_published=a.is_published,
+        image_url=a.image_url,
+        image_public_id=a.image_public_id,
+        position=a.position or 0,
+        scheduled_start=a.scheduled_start,
+        question_count=question_count or 0,
+    )
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Naive datetimes from clients are taken as UTC."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _option_images_json(options) -> str | None:
+    """Serialise option images aligned with the option list; None when no option has one."""
+    images = [
+        {"url": o.option_image_url, "public_id": o.option_image_public_id}
+        if o.option_image_url
+        else None
+        for o in options
+    ]
+    return json.dumps(images) if any(images) else None
+
+
+def _option_images(q: Question, option_count: int) -> list[dict | None]:
+    try:
+        images = json.loads(q.option_images_json) if q.option_images_json else []
+    except (ValueError, TypeError):
+        images = []
+    # Pad/trim so callers can always zip it with the options.
+    return (images + [None] * option_count)[:option_count]
+
+
 def _question_to_admin_response(q: Question) -> QuestionAdminResponse:
     try:
         options = json.loads(q.options_json) if q.options_json else []
@@ -113,7 +263,11 @@ def _question_to_admin_response(q: Question) -> QuestionAdminResponse:
             q.question_type.value if hasattr(q.question_type, "value") else str(q.question_type)
         ),
         options=options,
+        option_images=_option_images(q, len(options)),
         correct_answer=q.correct_answer,
+        explanation=q.explanation,
+        question_image_url=q.question_image_url,
+        question_image_public_id=q.question_image_public_id,
         marks=q.marks,
         position=q.position,
     )
@@ -126,17 +280,252 @@ def _question_to_admin_response(q: Question) -> QuestionAdminResponse:
 
 @router.get("/", response_model=list[AssessmentResponse])
 async def list_assessments(
-    course_id: int,
+    course_id: int | None = Query(None),
+    module_id: int | None = Query(None, description="course_service module (lesson) id"),
     payload: dict | None = Depends(get_optional_payload),
     db: Session = Depends(get_db),
 ):
-    """List assessments for a course. Anonymous visitors and students only see published ones."""
-    requester_role = payload.get("role", "").lower() if payload else ""
-    q = db.query(Assessment).filter(Assessment.course_id == course_id)
-    if not payload or requester_role == "student":
+    """List assessments of a course and/or one of its lessons. Anonymous visitors and students only see published ones."""
+    if course_id is None and module_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "FILTER_REQUIRED", "message": "Provide course_id or module_id"},
+        )
+    q = db.query(Assessment)
+    if course_id is not None:
+        q = q.filter(Assessment.course_id == course_id)
+    if module_id is not None:
+        q = q.filter(Assessment.module_id == module_id)
+    if _is_public_viewer(payload):
         q = q.filter(Assessment.is_published.is_(True))
-    assessments = q.order_by(Assessment.id).all()
-    return assessments
+    assessments = q.order_by(Assessment.position, Assessment.id).all()
+    counts = _question_counts([a.id for a in assessments], db)
+    return [_to_response(a, counts.get(a.id, 0)) for a in assessments]
+
+
+@router.get("/internal/stats")
+async def assessment_stats_internal(db: Session = Depends(get_db)):
+    """Service-to-service only (blocked at the gateway): counts for the public homepage."""
+    return {
+        "published_exams": db.query(Assessment).filter(Assessment.is_published.is_(True)).count(),
+        "graded_attempts": db.query(Submission)
+        .filter(Submission.status == SubmissionStatus.graded)
+        .count(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Badges (static paths, so they sit above GET /{assessment_id})
+# ---------------------------------------------------------------------------
+
+
+def _user_badges(student_id: int, db: Session) -> list[UserBadgeResponse]:
+    rows = (
+        db.query(UserBadge, Badge)
+        .join(Badge, Badge.id == UserBadge.badge_id)
+        .filter(UserBadge.student_id == student_id)
+        .order_by(UserBadge.awarded_at.desc())
+        .all()
+    )
+    return [
+        UserBadgeResponse(
+            id=ub.id,
+            badge_id=b.id,
+            user_id=ub.student_id,
+            awarded_at=ub.awarded_at,
+            badge=BadgeResponse.model_validate(b),
+        )
+        for ub, b in rows
+    ]
+
+
+@router.get("/badges", response_model=list[BadgeResponse])
+async def list_badges(db: Session = Depends(get_db)):
+    """Every badge that can be earned (public)."""
+    return db.query(Badge).order_by(Badge.category, Badge.name).all()
+
+
+@router.get("/badges/my", response_model=list[UserBadgeResponse])
+async def my_badges(
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return _user_badges(int(payload["sub"]), db)
+
+
+@router.get("/badges/dashboard", response_model=BadgeDashboardResponse)
+async def badge_dashboard(
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    return BadgeDashboardResponse(
+        available_badges=db.query(Badge).order_by(Badge.category, Badge.name).all(),
+        earned_badges=_user_badges(int(payload["sub"]), db),
+    )
+
+
+@router.get("/my-submissions", response_model=list[MyAttemptItem])
+async def list_my_submissions(
+    limit: int = Query(10, ge=1, le=50),
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """The caller's own graded attempts, newest first (My Results)."""
+    student_id = int(payload["sub"])
+    submissions = (
+        db.query(Submission)
+        .filter(Submission.student_id == student_id, Submission.status == SubmissionStatus.graded)
+        .order_by(Submission.submitted_at.desc(), Submission.id.desc())
+        .limit(limit)
+        .all()
+    )
+    if not submissions:
+        return []
+
+    assessment_ids = {sub.assessment_id for sub in submissions}
+    assessments = {
+        a.id: a for a in db.query(Assessment).filter(Assessment.id.in_(assessment_ids)).all()
+    }
+    questions_by_assessment: dict[int, list[Question]] = {}
+    for q in db.query(Question).filter(Question.assessment_id.in_(assessment_ids)).all():
+        questions_by_assessment.setdefault(q.assessment_id, []).append(q)
+    course_titles = await get_course_titles([a.course_id for a in assessments.values()])
+
+    # Attempt number = graded attempts on that exam up to and including this one.
+    history = (
+        db.query(Submission.id, Submission.assessment_id)
+        .filter(
+            Submission.student_id == student_id,
+            Submission.assessment_id.in_(assessment_ids),
+            Submission.status == SubmissionStatus.graded,
+        )
+        .order_by(Submission.submitted_at, Submission.id)
+        .all()
+    )
+    attempt_numbers: dict[int, int] = {}
+    seen: dict[int, int] = {}
+    for sub_id, a_id in history:
+        seen[a_id] = seen.get(a_id, 0) + 1
+        attempt_numbers[sub_id] = seen[a_id]
+
+    items = []
+    for sub in submissions:
+        assessment = assessments.get(sub.assessment_id)
+        if not assessment:
+            continue  # the exam was deleted since
+        questions = questions_by_assessment.get(sub.assessment_id, [])
+        items.append(
+            MyAttemptItem(
+                attempt_id=sub.id,
+                exam_id=assessment.id,
+                attempt_number=attempt_numbers.get(sub.id, 1),
+                course_id=assessment.course_id,
+                sub_course_id=assessment.module_id,
+                exam_title=assessment.title,
+                course_title=course_titles.get(assessment.course_id, ""),
+                marks_obtained=_correct_count(questions, _answers_of(sub)),
+                total_questions=len(questions),
+                time_taken_seconds=_time_taken(sub),
+                status="submitted",
+                started_at=sub.started_at,
+                submitted_at=sub.submitted_at,
+                overall_rank=_overall_rank(assessment.id, float(sub.score or 0), db),
+            )
+        )
+    return items
+
+
+@router.get("/submissions/{submission_id}/review", response_model=AttemptReviewResponse)
+async def review_submission(
+    submission_id: int,
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Full Q&A review of one graded attempt, for its student, an admin, or the course teacher."""
+    submission = (
+        db.query(Submission)
+        .filter(Submission.id == submission_id, Submission.status == SubmissionStatus.graded)
+        .first()
+    )
+    not_found = HTTPException(status_code=404, detail={"error": "ATTEMPT_NOT_FOUND"})
+    if not submission:
+        raise not_found
+    assessment = db.query(Assessment).filter(Assessment.id == submission.assessment_id).first()
+    if not assessment:
+        raise not_found
+
+    requester_id = int(payload["sub"])
+    requester_role = payload.get("role", "").lower()
+    if submission.student_id != requester_id:
+        if requester_role == "student":
+            raise not_found  # never confirm that another student's attempt exists
+        await _assert_course_owner(assessment.course_id, requester_id, requester_role)
+
+    questions = (
+        db.query(Question)
+        .filter(Question.assessment_id == assessment.id)
+        .order_by(Question.position, Question.id)
+        .all()
+    )
+    answers = _answers_of(submission)
+    score = float(submission.score or 0)
+    course_titles = await get_course_titles([assessment.course_id])
+    return AttemptReviewResponse(
+        attempt_id=submission.id,
+        student_id=submission.student_id,
+        score=score,
+        passed=score >= assessment.pass_score,
+        marks_obtained=_correct_count(questions, answers),
+        total_questions=len(questions),
+        time_taken_seconds=_time_taken(submission),
+        submitted_at=submission.submitted_at,
+        review=_build_review(questions, answers),
+        ranking=AttemptRanking(
+            exam_id=assessment.id,
+            course_id=assessment.course_id,
+            exam_title=assessment.title,
+            course_title=course_titles.get(assessment.course_id, ""),
+            overall_rank=_overall_rank(assessment.id, score, db),
+        ),
+    )
+
+
+# Must stay above GET /{assessment_id}, which would otherwise capture it.
+@router.get("/my-attempts", response_model=list[MyAttemptSummary])
+async def list_my_attempts(
+    course_id: int = Query(...),
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """The caller's own graded attempts, summarised per assessment of one course."""
+    pass_scores = dict(
+        db.query(Assessment.id, Assessment.pass_score).filter(Assessment.course_id == course_id).all()
+    )
+    if not pass_scores:
+        return []
+    submissions = (
+        db.query(Submission)
+        .filter(
+            Submission.student_id == int(payload["sub"]),
+            Submission.assessment_id.in_(list(pass_scores)),
+            Submission.status == SubmissionStatus.graded,
+        )
+        .order_by(Submission.submitted_at.desc())
+        .all()
+    )
+    summary: dict[int, MyAttemptSummary] = {}
+    for sub in submissions:
+        score = float(sub.score or 0)
+        passed = score >= pass_scores[sub.assessment_id]
+        existing = summary.get(sub.assessment_id)
+        if existing is None:
+            summary[sub.assessment_id] = MyAttemptSummary(
+                assessment_id=sub.assessment_id, attempt_count=1, last_score=score, passed=passed
+            )
+        else:
+            existing.attempt_count += 1
+            existing.passed = existing.passed or passed
+    return list(summary.values())
 
 
 @router.post("/", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
@@ -151,6 +540,7 @@ async def create_assessment(
 
     assessment = Assessment(
         course_id=body.course_id,
+        module_id=body.module_id,
         lesson_id=body.lesson_id,
         title=body.title,
         description=body.description,
@@ -159,11 +549,36 @@ async def create_assessment(
         max_score=body.max_score,
         pass_score=body.pass_score,
         is_published=body.is_published,
+        image_url=body.image_url,
+        image_public_id=body.image_public_id,
+        position=body.position,
+        scheduled_start=_as_utc(body.scheduled_start),
     )
     db.add(assessment)
     db.commit()
     db.refresh(assessment)
-    return assessment
+    return _to_response(assessment, 0)
+
+
+@router.delete("/by-module/{module_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_module_assessments(
+    module_id: int,
+    course_id: int = Query(...),
+    payload: dict = Depends(require_role(_TEACHER_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Removes every exam (and its questions) inside one lesson — called before the lesson itself is deleted."""
+    await _assert_course_owner(course_id, int(payload["sub"]), payload.get("role", "").lower())
+    ids = [
+        row.id
+        for row in db.query(Assessment.id).filter(
+            Assessment.course_id == course_id, Assessment.module_id == module_id
+        )
+    ]
+    if ids:
+        db.query(Question).filter(Question.assessment_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Assessment).filter(Assessment.id.in_(ids)).delete(synchronize_session=False)
+        db.commit()
 
 
 @router.put("/{assessment_id}", response_model=AssessmentResponse)
@@ -181,12 +596,14 @@ async def update_assessment(
     updates = body.model_dump(exclude_unset=True)
     if "assessment_type" in updates:
         updates["assessment_type"] = AssessmentType(updates["assessment_type"])
+    if "scheduled_start" in updates:
+        updates["scheduled_start"] = _as_utc(updates["scheduled_start"])
     for field, value in updates.items():
         setattr(assessment, field, value)
 
     db.commit()
     db.refresh(assessment)
-    return assessment
+    return _to_response(assessment, db=db)
 
 
 @router.delete("/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -208,6 +625,58 @@ async def delete_assessment(
 # ---------------------------------------------------------------------------
 # Question management endpoints (teacher/admin authoring)
 # ---------------------------------------------------------------------------
+
+_MAX_CSV_SIZE = 2 * 1024 * 1024  # 2 MB
+
+_CSV_COLUMNS = (
+    "question_text",
+    "option_a",
+    "option_b",
+    "option_c",
+    "option_d",
+    "option_e",
+    "correct_answer",
+    "explanation",
+)
+
+_CSV_TEMPLATE_ROWS = (
+    (
+        "What is the capital of France?",
+        "London", "Paris", "Berlin", "Madrid", "",
+        "B",
+        "Paris is the capital and largest city of France.",
+    ),
+    (
+        "Which planet is known as the Red Planet?",
+        "Venus", "Mars", "Jupiter", "Saturn", "",
+        "B",
+        "Mars looks red because of iron oxide on its surface.",
+    ),
+    (
+        "What is the derivative of x^2?",
+        "x", "2x", "x^2", "2", "0",
+        "B",
+        "By the power rule, d/dx(x^2) = 2x.",
+    ),
+)
+
+
+@router.get("/questions/csv-template")
+async def download_questions_csv_template(
+    _: dict = Depends(require_role(_TEACHER_ADMIN)),
+):
+    """A ready-to-fill CSV showing the columns the importer expects."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(_CSV_COLUMNS)
+    writer.writerows(_CSV_TEMPLATE_ROWS)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="questions_template.csv"'
+        },
+    )
 
 
 @router.get("/{assessment_id}/questions", response_model=list[QuestionAdminResponse])
@@ -264,7 +733,11 @@ async def create_question(
         question_text=body.question_text,
         question_type=QuestionType(body.question_type),
         options_json=json.dumps(option_texts) if option_texts else None,
+        option_images_json=_option_images_json(body.options),
         correct_answer=correct_answer,
+        explanation=body.explanation,
+        question_image_url=body.question_image_url,
+        question_image_public_id=body.question_image_public_id,
         marks=body.marks,
         position=body.position,
     )
@@ -272,6 +745,123 @@ async def create_question(
     db.commit()
     db.refresh(question)
     return _question_to_admin_response(question)
+
+
+@router.post(
+    "/{assessment_id}/questions/import-csv",
+    response_model=CsvImportResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_questions_csv(
+    assessment_id: int,
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role(_TEACHER_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """
+    Appends MCQ questions from a CSV in the /questions/csv-template shape.
+    Rows are independent: a bad row is reported and skipped, the rest import.
+    """
+    requester_id = int(payload["sub"])
+    requester_role = payload.get("role", "").lower()
+    assessment = _get_assessment_or_404(assessment_id, db)
+    await _assert_course_owner(assessment.course_id, requester_id, requester_role)
+
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=415,
+            detail={"error": "NOT_A_CSV", "message": "File must be a .csv"},
+        )
+
+    raw = await file.read()
+    if len(raw) > _MAX_CSV_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "FILE_TOO_LARGE", "message": "CSV exceeds the 2 MB limit"},
+        )
+    try:
+        # utf-8-sig drops the BOM Excel writes, which would otherwise corrupt
+        # the first column name and make every row look like it lacks a question.
+        text_content = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "INVALID_ENCODING", "message": "CSV must be UTF-8 encoded"},
+        )
+
+    created, errors = import_question_rows(db, assessment_id, text_content)
+    if created:
+        db.commit()
+
+    return CsvImportResult(
+        message=f"Imported {created} question(s)",
+        questions_created=created,
+        errors=errors,
+    )
+
+
+_MAX_ZIP_SIZE = 100 * 1024 * 1024  # 100 MB
+
+
+async def _read_zip(file: UploadFile) -> bytes:
+    if not (file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(status_code=415, detail={"error": "NOT_A_ZIP", "message": "Please upload a .zip file"})
+    data = await file.read()
+    if len(data) > _MAX_ZIP_SIZE:
+        raise HTTPException(status_code=413, detail={"error": "FILE_TOO_LARGE", "message": "ZIP must be 100 MB or less"})
+    return data
+
+
+@router.post("/{assessment_id}/questions/images-zip")
+async def upload_question_images_zip(
+    assessment_id: int,
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role(_TEACHER_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Attach images named {question_number}-{n}.png (n = 0 question, 1-5 options A-E)."""
+    assessment = _get_assessment_or_404(assessment_id, db)
+    await _assert_course_owner(assessment.course_id, int(payload["sub"]), payload.get("role", "").lower())
+    try:
+        zf = safe_zip(await _read_zip(file))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_ZIP", "message": str(e)})
+    images = [(info.filename, zf.read(info)) for info in zf.infolist() if not info.is_dir()]
+    applied, skipped, errors = await apply_question_images(db, assessment_id, images)
+    db.commit()
+    return {
+        "applied": applied,
+        "skipped": skipped,
+        "errors": errors,
+        "message": f"Applied {applied} image(s)" + (f", skipped {skipped} file(s) with other names" if skipped else ""),
+    }
+
+
+@router.get("/bulk-import/template")
+async def bulk_import_template(_: dict = Depends(require_role(_TEACHER_ADMIN))):
+    return Response(
+        content=template_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="bulk_exam_template.zip"'},
+    )
+
+
+@router.post("/bulk-import")
+async def bulk_import_exams(
+    course_id: int = Query(...),
+    module_id: int | None = Query(None, description="The lesson the exams go into"),
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role(_TEACHER_ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Create several exams (with questions, images and thumbnails) from one ZIP bundle."""
+    await _assert_course_owner(course_id, int(payload["sub"]), payload.get("role", "").lower())
+    data = await _read_zip(file)
+    try:
+        return await bulk_import(db, course_id, module_id, data)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail={"error": "INVALID_BUNDLE", "message": str(e)})
 
 
 @router.put("/questions/{question_id}", response_model=QuestionAdminResponse)
@@ -291,6 +881,7 @@ async def update_question(
     if "options" in updates:
         options = updates.pop("options") or []
         question.options_json = json.dumps([o["option_text"] for o in options]) if options else None
+        question.option_images_json = _option_images_json(body.options or [])
         correct_from_options = next((o["option_text"] for o in options if o["is_correct"]), None)
         if correct_from_options and "correct_answer" not in updates:
             question.correct_answer = correct_from_options
@@ -330,12 +921,18 @@ async def delete_question(
 async def get_assessment(
     assessment_id: int,
     db: Session = Depends(get_db),
-    _: dict = Depends(require_role(_ALL_ROLES)),
+    payload: dict = Depends(require_role(_ALL_ROLES)),
 ):
     """
     Get assessment metadata by ID.
     """
-    return _get_assessment_or_404(assessment_id, db)
+    assessment = _get_assessment_or_404(assessment_id, db)
+    if _is_public_viewer(payload) and not assessment.is_published:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "ASSESSMENT_NOT_FOUND", "message": "Assessment not found"},
+        )
+    return _to_response(assessment, db=db)
 
 
 @router.post("/{assessment_id}/start", response_model=StartSessionResponse)
@@ -353,6 +950,30 @@ async def start_assessment_session(
     student_id = int(payload["sub"])
     redis_c = get_redis_client()
 
+    assessment = _get_assessment_or_404(assessment_id, db)
+    if _is_public_viewer(payload):
+        if not assessment.is_published:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "ASSESSMENT_NOT_FOUND", "message": "Assessment not found"},
+            )
+        if not await is_enrolled(student_id, assessment.course_id, assessment.module_id):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "NOT_ENROLLED", "message": "Enroll in this course to take this exam"},
+            )
+        starts_at = _as_utc(assessment.scheduled_start)
+        if starts_at and datetime.now(timezone.utc) < starts_at:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "EXAM_NOT_STARTED",
+                    "not_started_yet": True,
+                    "message": "This exam has not started yet",
+                    "scheduled_start": starts_at.isoformat(),
+                },
+            )
+
     # Check duplicate active session (AC5)
     active_key = f"session:active:{student_id}:{assessment_id}"
     existing_session_id = redis_c.get(active_key)
@@ -368,8 +989,6 @@ async def start_assessment_session(
                     "time_remaining_seconds": remaining,
                 },
             )
-
-    assessment = _get_assessment_or_404(assessment_id, db)
 
     # Fetch questions
     questions = (
@@ -426,6 +1045,11 @@ async def start_assessment_session(
                 else str(q.question_type)
             ),
             options_json=q.options_json,
+            question_image_url=q.question_image_url,
+            option_image_urls=[
+                img["url"] if img else None
+                for img in _option_images(q, len(json.loads(q.options_json or "[]")))
+            ],
             marks=q.marks,
             position=q.position,
         )
@@ -561,8 +1185,16 @@ async def submit_assessment(
         + 1
     )
 
+    new_badges: list[Badge] = []
+    try:
+        new_badges = evaluate_after_attempt(db, submission, assessment)
+    except Exception as e:  # a badge hiccup must never fail the submit itself
+        db.rollback()
+        logger.error("Badge evaluation failed for submission %s: %s", submission.id, e)
+
     return SubmitAssessmentResponse(
         session_id=body.session_id,
+        new_badges=[BadgeResponse.model_validate(b) for b in new_badges],
         score=score,
         passed=passed,
         correct_count=correct_count,

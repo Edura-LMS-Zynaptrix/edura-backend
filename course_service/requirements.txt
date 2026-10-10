@@ -10,3 +10,4 @@ pika
 pytest>=7.4
 httpx>=0.25
 pytest-cov>=4.1
+python-multipart>=0.0.9

@@ -15,8 +15,18 @@ from fastapi import (
     UploadFile,
     status,
 )
-from models import Payment, PaymentMethod, PaymentReceipt, PaymentStatus, ReceiptStatus
+from models import (
+    BankAccount,
+    Payment,
+    PaymentMethod,
+    PaymentReceipt,
+    PaymentStatus,
+    ReceiptStatus,
+)
 from schemas import (
+    BankAccountCreate,
+    BankAccountResponse,
+    BankAccountUpdate,
     CheckoutRequest,
     CheckoutResponse,
     FreeEnrollRequest,
@@ -427,3 +437,73 @@ async def verify_receipt(
         reviewed_at=receipt.reviewed_at,
         created_at=receipt.created_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Bank accounts — shown to students on the bank-slip page, managed by admins
+# ---------------------------------------------------------------------------
+
+
+def _get_bank_account_or_404(account_id: int, db: Session) -> BankAccount:
+    account = db.query(BankAccount).filter(BankAccount.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail={"error": "BANK_ACCOUNT_NOT_FOUND"})
+    return account
+
+
+@router.get("/bank-accounts", response_model=list[BankAccountResponse])
+def list_active_bank_accounts(db: Session = Depends(get_db)):
+    """Public: where to deposit before uploading a bank slip."""
+    return (
+        db.query(BankAccount)
+        .filter(BankAccount.is_active.is_(True))
+        .order_by(BankAccount.order_number, BankAccount.id)
+        .all()
+    )
+
+
+@router.get("/admin/bank-accounts", response_model=list[BankAccountResponse])
+def list_all_bank_accounts(
+    _: dict = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db),
+):
+    return db.query(BankAccount).order_by(BankAccount.order_number, BankAccount.id).all()
+
+
+@router.post("/admin/bank-accounts", response_model=BankAccountResponse, status_code=201)
+def create_bank_account(
+    body: BankAccountCreate,
+    _: dict = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db),
+):
+    account = BankAccount(**body.model_dump())
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    return account
+
+
+@router.patch("/admin/bank-accounts/{account_id}", response_model=BankAccountResponse)
+def update_bank_account(
+    account_id: int,
+    body: BankAccountUpdate,
+    _: dict = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db),
+):
+    account = _get_bank_account_or_404(account_id, db)
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(account, field, value)
+    db.commit()
+    db.refresh(account)
+    return account
+
+
+@router.delete("/admin/bank-accounts/{account_id}", status_code=204)
+def delete_bank_account(
+    account_id: int,
+    _: dict = Depends(require_role(["admin"])),
+    db: Session = Depends(get_db),
+):
+    db.delete(_get_bank_account_or_404(account_id, db))
+    db.commit()
+

@@ -5,7 +5,8 @@ import sys
 # Ensure assessment_service root is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import jwt
 import pytest
@@ -52,6 +53,23 @@ app.dependency_overrides[get_db] = override_get_db
 def create_token(user_id: int = 101, role: str = "student") -> str:
     payload = {"sub": str(user_id), "role": role}
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+
+@pytest.fixture(autouse=True)
+def isolated_redis():
+    # A fresh in-memory store per test: never touches the shared Redis, and
+    # one test's active exam session can't leak into the next run.
+    from redis_client import MemoryRedisClient
+
+    with patch("router.get_redis_client", return_value=MemoryRedisClient()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def enrolled_by_default():
+    # enrollment_service is a separate service; individual tests override this.
+    with patch("router.is_enrolled", new=AsyncMock(return_value=True)):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -279,3 +297,150 @@ def test_other_violation_types():
 def test_unauthorized_access():
     response = client.post("/api/assessments/1/start")
     assert response.status_code == 401
+
+
+def test_start_requires_enrollment():
+    token = create_token(user_id=107, role="STUDENT")
+    with patch("router.is_enrolled", new=AsyncMock(return_value=False)):
+        response = client.post(
+            "/api/assessments/1/start",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "NOT_ENROLLED"
+
+
+def test_start_blocked_before_scheduled_start():
+    db = TestingSessionLocal()
+    db.query(Assessment).filter(Assessment.id == 1).update(
+        {Assessment.scheduled_start: datetime.now(timezone.utc) + timedelta(hours=2)}
+    )
+    db.commit()
+    db.close()
+
+    token = create_token(user_id=108, role="student")
+    response = client.post(
+        "/api/assessments/1/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["not_started_yet"] is True
+
+
+def _import_csv(content: str, filename: str = "questions.csv"):
+    token = create_token(user_id=1, role="ADMIN")
+    return client.post(
+        "/1/questions/import-csv",
+        files={"file": (filename, content.encode("utf-8-sig"), "text/csv")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+def test_csv_template_download():
+    token = create_token(user_id=1, role="admin")
+    res = client.get("/questions/csv-template", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("text/csv")
+    assert res.text.splitlines()[0] == (
+        "question_text,option_a,option_b,option_c,option_d,option_e,correct_answer,explanation"
+    )
+
+
+def test_csv_template_requires_teacher_or_admin():
+    token = create_token(user_id=110, role="student")
+    res = client.get("/questions/csv-template", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 403
+
+
+def test_csv_import_creates_valid_rows_and_reports_bad_ones():
+    csv_text = (
+        "question_text,option_a,option_b,option_c,option_d,option_e,correct_answer,explanation\n"
+        "Capital of France?,London,Paris,Berlin,,,b,Paris is the capital.\n"
+        "Only one option,Solo,,,,,A,\n"
+        "Answer is an empty option,Yes,No,,,,D,\n"
+        "Duplicate options,Same,Same,,,,A,\n"
+    )
+    res = _import_csv(csv_text)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["questions_created"] == 1
+    assert len(data["errors"]) == 3
+    assert data["errors"][0].startswith("Row 3:")
+
+    db = TestingSessionLocal()
+    imported = db.query(Question).filter(Question.question_text == "Capital of France?").one()
+    assert imported.correct_answer == "Paris"
+    assert imported.explanation == "Paris is the capital."
+    assert json.loads(imported.options_json) == ["London", "Paris", "Berlin"]
+    assert imported.position == 3  # appended after the two seeded questions
+    db.close()
+
+
+def test_csv_import_rejects_non_csv():
+    res = _import_csv("not,a,csv", filename="questions.txt")
+    assert res.status_code == 415
+
+
+def test_list_by_module_orders_by_position_and_counts_questions():
+    db = TestingSessionLocal()
+    db.query(Assessment).filter(Assessment.id == 1).update(
+        {Assessment.module_id: 7, Assessment.position: 2}
+    )
+    db.add(
+        Assessment(
+            id=2, course_id=10, module_id=7, position=1, title="Warm-up",
+            assessment_type=AssessmentType.exam, is_published=True,
+        )
+    )
+    db.commit()
+    db.close()
+
+    token = create_token(user_id=109, role="student")
+    response = client.get(
+        "/?module_id=7", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert [a["id"] for a in data] == [2, 1]
+    assert [a["question_count"] for a in data] == [0, 2]
+
+
+def test_perfect_first_attempt_earns_badges_once():
+    from badges import seed_badges
+    from models import UserBadge
+
+    db = TestingSessionLocal()
+    seed_badges(db)
+    db.query(UserBadge).delete()
+    db.commit()
+    db.close()
+
+    token = create_token(user_id=120, role="student")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def take_exam():
+        start = client.post("/api/assessments/1/start", headers=headers).json()
+        return client.post(
+            "/api/assessments/1/submit",
+            json={
+                "session_id": start["session_id"],
+                "answers": [
+                    {"question_id": 1, "selected_option": "def"},
+                    {"question_id": 2, "selected_option": "False"},
+                ],
+            },
+            headers=headers,
+        ).json()
+
+    with patch("router.publish_assessment_graded"):
+        first = take_exam()
+        second = take_exam()
+
+    first_keys = {b["criteria_key"] for b in first["new_badges"]}
+    assert {"first_step", "perfect_100", "speed_demon"} <= first_keys
+    # Already-earned badges are never awarded twice.
+    assert not ({b["criteria_key"] for b in second["new_badges"]} & first_keys)
+
+    dashboard = client.get("/badges/dashboard", headers=headers).json()
+    assert len(dashboard["available_badges"]) == 10
+    assert {e["badge"]["criteria_key"] for e in dashboard["earned_badges"]} >= first_keys

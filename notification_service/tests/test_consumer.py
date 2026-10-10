@@ -168,7 +168,7 @@ def test_process_proctoring_violation():
         db.close()
 
 
-def test_smtp_failure_nacks_and_logs_failed():
+def test_smtp_failure_acks_and_logs_failed():
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 5
@@ -190,8 +190,9 @@ def test_smtp_failure_nacks_and_logs_failed():
     ):
         process_message(mock_ch, mock_method, None, body)
 
-        mock_ch.basic_nack.assert_called_once_with(delivery_tag=5, requeue=True)
-        mock_ch.basic_ack.assert_not_called()
+        # The failure is logged and the message acked, not requeued forever.
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=5)
+        mock_ch.basic_nack.assert_not_called()
 
     db = TestingSessionLocal()
     try:
@@ -251,5 +252,5 @@ def test_start_consumer():
         mock_pika_conn.assert_called_once()
         mock_channel.exchange_declare.assert_called_once()
         mock_channel.queue_declare.assert_called_once()
-        assert mock_channel.queue_bind.call_count == 5
+        assert mock_channel.queue_bind.call_count == 7
         mock_channel.start_consuming.assert_called_once()
