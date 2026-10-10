@@ -252,5 +252,46 @@ def test_start_consumer():
         mock_pika_conn.assert_called_once()
         mock_channel.exchange_declare.assert_called_once()
         mock_channel.queue_declare.assert_called_once()
-        assert mock_channel.queue_bind.call_count == 7
+        assert mock_channel.queue_bind.call_count == 8
         mock_channel.start_consuming.assert_called_once()
+
+
+def test_process_progress_report_attaches_pdf():
+    import base64
+
+    mock_ch = MagicMock()
+    mock_method = MagicMock()
+    mock_method.delivery_tag = 9
+    mock_method.routing_key = "report.progress"
+
+    body = json.dumps(
+        {
+            "user_id": 7,
+            "email": "nimal@example.com",
+            "student_name": "Nimal",
+            "month": "October 2026",
+            "filename": "Progress_Report_Nimal_20261010.pdf",
+            "pdf_base64": base64.b64encode(b"%PDF-1.4 report").decode(),
+        }
+    )
+
+    with patch("consumer.send_email") as mock_send:
+        process_message(mock_ch, mock_method, None, body)
+
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs["to_email"] == "nimal@example.com"
+        assert kwargs["subject"] == "Your Edura Progress Report - October 2026"
+        assert "Nimal" in kwargs["html_body"]
+        (attachment,) = kwargs["attachments"]
+        assert attachment["filename"] == "Progress_Report_Nimal_20261010.pdf"
+        assert attachment["data"] == b"%PDF-1.4 report"
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=9)
+
+    db = TestingSessionLocal()
+    try:
+        log = db.query(NotificationLog).filter_by(recipient_email="nimal@example.com").first()
+        assert log.event_type == NotificationEvent.progress_report
+        assert log.status == NotificationStatus.sent
+        assert "%PDF" not in log.body  # the log keeps the email body, not the attachment
+    finally:
+        db.close()

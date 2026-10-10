@@ -5,10 +5,18 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth_service:8001")
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:8002")
 COURSE_SERVICE_URL = os.getenv("COURSE_SERVICE_URL", "http://course_service:8003")
 ENROLLMENT_SERVICE_URL = os.getenv("ENROLLMENT_SERVICE_URL", "http://enrollment_service:8005")
 ASSESSMENT_SERVICE_URL = os.getenv("ASSESSMENT_SERVICE_URL", "http://assessment_service:8007")
+
+# The serverless database behind the services can take several seconds to wake.
+_TIMEOUT = 10.0
+
+
+class SourceUnavailable(Exception):
+    """A service whose data a view depends on could not be reached."""
 
 
 async def _get(client: httpx.AsyncClient, url: str, default):
@@ -34,3 +42,77 @@ async def fetch_platform_sources() -> dict:
         "enrollments": enrollments,
         "assessments": assessments,
     }
+
+
+async def _required(url: str, params: dict | None = None):
+    """For reports, a missing source would show up as false zeros — fail loudly instead.
+
+    Returns None for 404 so callers can tell "no such record" from "service down".
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(url, params=params)
+    except Exception as e:
+        logger.error("Progress source unreachable (%s): %r", url, e)
+        raise SourceUnavailable(url) from e
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        logger.error("Progress source failed (%s): HTTP %s", url, r.status_code)
+        raise SourceUnavailable(url)
+    return r.json()
+
+
+def _ids(values) -> str:
+    return ",".join(str(v) for v in sorted(set(values)))
+
+
+async def profile(user_id: int) -> dict | None:
+    return await _required(f"{USER_SERVICE_URL}/internal/profiles/{user_id}")
+
+
+async def account(user_id: int) -> dict | None:
+    return await _required(f"{AUTH_SERVICE_URL}/internal/users/{user_id}")
+
+
+async def students(limit: int = 500) -> list[dict]:
+    return await _required(f"{USER_SERVICE_URL}/internal/students", {"limit": limit}) or []
+
+
+async def accessible(user_id: int) -> dict:
+    data = await _required(f"{ENROLLMENT_SERVICE_URL}/internal/students/{user_id}/accessible")
+    return data or {"course_ids": [], "lesson_ids": []}
+
+
+async def exam_progress(user_id: int, course_ids: list[int], lesson_ids: list[int]) -> list[dict]:
+    if not course_ids and not lesson_ids:
+        return []
+    params = {}
+    if course_ids:
+        params["course_ids"] = _ids(course_ids)
+    if lesson_ids:
+        params["lesson_ids"] = _ids(lesson_ids)
+    return await _required(
+        f"{ASSESSMENT_SERVICE_URL}/internal/students/{user_id}/exam-progress", params
+    ) or []
+
+
+async def badge_count(user_id: int) -> int:
+    data = await _required(f"{ASSESSMENT_SERVICE_URL}/internal/students/{user_id}/badge-count")
+    return int((data or {}).get("count", 0))
+
+
+async def course_titles(course_ids) -> dict[int, str]:
+    if not course_ids:
+        return {}
+    data = await _required(f"{COURSE_SERVICE_URL}/internal/titles", {"ids": _ids(course_ids)})
+    return {int(k): v for k, v in (data or {}).items()}
+
+
+async def course_modules(course_id: int) -> list[dict] | None:
+    return await _required(f"{COURSE_SERVICE_URL}/internal/courses/{course_id}/modules")
+
+
+async def first_attempts(course_id: int) -> dict:
+    data = await _required(f"{ASSESSMENT_SERVICE_URL}/internal/courses/{course_id}/first-attempts")
+    return data or {"exams": [], "attempts": []}

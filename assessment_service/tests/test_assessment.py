@@ -444,3 +444,108 @@ def test_perfect_first_attempt_earns_badges_once():
     dashboard = client.get("/badges/dashboard", headers=headers).json()
     assert len(dashboard["available_badges"]) == 10
     assert {e["badge"]["criteria_key"] for e in dashboard["earned_badges"]} >= first_keys
+
+
+# ---------------------------------------------------------------------------
+# Public rankings
+# ---------------------------------------------------------------------------
+
+from models import SubmissionStatus  # noqa: E402
+from rankings import rank_rows  # noqa: E402
+
+PROFILES = {
+    201: {"user_id": 201, "role": "student", "full_name": "Ama Perera", "school": "Visakha", "district": "Colombo", "grade": 11},
+    202: {"user_id": 202, "role": "student", "full_name": "Kamal Silva", "school": "Trinity", "district": "Kandy", "grade": 11},
+    203: {"user_id": 203, "role": "student", "full_name": "Nimal Fernando", "school": "Royal", "district": "Colombo", "grade": 11},
+    900: {"user_id": 900, "role": "teacher", "full_name": "Staff Tester", "school": "", "district": "Colombo", "grade": None},
+}
+
+
+def _graded(student_id, score, seconds, minutes_ago):
+    submitted = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    return Submission(
+        assessment_id=1,
+        student_id=student_id,
+        status=SubmissionStatus.graded,
+        score=score,
+        started_at=submitted - timedelta(seconds=seconds),
+        submitted_at=submitted,
+    )
+
+
+@pytest.fixture
+def ranked_attempts():
+    db = TestingSessionLocal()
+    db.add_all([
+        _graded(201, 80, 300, minutes_ago=50),
+        _graded(201, 100, 100, minutes_ago=10),  # retake: must not count
+        _graded(202, 80, 200, minutes_ago=40),
+        _graded(203, 60, 100, minutes_ago=30),
+        _graded(900, 100, 50, minutes_ago=20),  # staff: kept off the board
+    ])
+    db.commit()
+    db.close()
+    with (
+        patch("router.get_profiles", new=AsyncMock(side_effect=lambda ids: {i: PROFILES[i] for i in ids if i in PROFILES})),
+        patch("router.get_course_titles", new=AsyncMock(return_value={10: "Python"})),
+    ):
+        yield
+
+
+def test_rank_rows_ties_share_a_rank_and_districts_rank_separately():
+    rows = rank_rows([
+        {"id": "a", "score": 90, "time_seconds": 100, "district": "Colombo"},
+        {"id": "b", "score": 90, "time_seconds": 100, "district": "Kandy"},
+        {"id": "c", "score": 70, "time_seconds": 50, "district": "Colombo"},
+        {"id": "d", "score": 90, "time_seconds": 120, "district": "Colombo"},
+    ])
+    assert [(r["id"], r["rank"], r["district_rank"]) for r in rows] == [
+        ("a", 1, 1), ("b", 1, 1), ("d", 3, 2), ("c", 4, 3),
+    ]
+
+
+def test_leaderboard_is_public_and_uses_first_attempts(ranked_attempts):
+    r = client.get("/rankings/leaderboard", params={"exam_id": 1})
+    assert r.status_code == 200
+    board = r.json()
+    assert [(row["full_name"], row["score"], row["rank"], row["district_rank"]) for row in board] == [
+        ("Kamal Silva", 80, 1, 1),  # same score as Ama, faster
+        ("Ama Perera", 80, 2, 1),  # her 100% retake doesn't count
+        ("Nimal Fernando", 60, 3, 2),
+    ]
+    assert not any(row["is_current_user"] for row in board)
+    assert "student_id" not in board[0] and "user_id" not in board[0]
+
+
+def test_leaderboard_marks_caller_and_filters_district(ranked_attempts):
+    headers = {"Authorization": f"Bearer {create_token(203)}"}
+    board = client.get("/rankings/leaderboard", params={"exam_id": 1, "district": "colombo"}, headers=headers).json()
+    assert [(row["full_name"], row["is_current_user"]) for row in board] == [
+        ("Ama Perera", False), ("Nimal Fernando", True),
+    ]
+    assert len(client.get("/rankings/leaderboard", params={"exam_id": 1, "limit": 1, "offset": 1}).json()) == 1
+
+
+def test_leaderboard_hides_unpublished_exams(ranked_attempts):
+    db = TestingSessionLocal()
+    db.query(Assessment).filter(Assessment.id == 1).update({"is_published": False})
+    db.commit()
+    db.close()
+    assert client.get("/rankings/leaderboard", params={"exam_id": 1}).status_code == 404
+    assert client.get("/rankings/exams").json() == []
+
+
+def test_ranking_exams_public_and_per_student(ranked_attempts):
+    assert client.get("/rankings/exams").json() == [
+        {"exam_id": "1", "exam_title": "Python Basics Quiz", "course_title": "Python", "subject": "Python"}
+    ]
+    stranger = {"Authorization": f"Bearer {create_token(555)}"}
+    assert client.get("/rankings/exams", headers=stranger).json() == []
+
+
+def test_my_exam_rank(ranked_attempts):
+    mine = client.get("/rankings/exam/1", headers={"Authorization": f"Bearer {create_token(201)}"}).json()
+    assert (mine["overall_rank"], mine["district_rank"], mine["course_title"]) == (2, 1, "Python")
+    stranger = client.get("/rankings/exam/1", headers={"Authorization": f"Bearer {create_token(555)}"}).json()
+    assert stranger["overall_rank"] is None
+    assert client.get("/rankings/exam/1").status_code == 401

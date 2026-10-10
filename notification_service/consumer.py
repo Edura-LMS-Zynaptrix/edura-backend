@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -46,6 +47,7 @@ def process_message(ch, method, properties, body):
         context = {}
         event_type = NotificationEvent.general
         reference_id = None
+        attachments = []
 
         if routing_key == "auth.otp-requested":
             subject = "Your Edura Verification Code"
@@ -68,6 +70,17 @@ def process_message(ch, method, properties, body):
             template_name = "password_changed.html"
             event_type = NotificationEvent.password_changed
             context = {}
+        elif routing_key == "report.progress":
+            month = data.get("month", "")
+            subject = f"Your Edura Progress Report - {month}".rstrip(" -")
+            template_name = "progress_report.html"
+            event_type = NotificationEvent.progress_report
+            context = {"student_name": data.get("student_name", "Student"), "month": month}
+            attachments = [{
+                "filename": data.get("filename", "Progress_Report.pdf"),
+                "data": base64.b64decode(data["pdf_base64"]),
+                "subtype": "pdf",
+            }]
         elif routing_key == "payment.success":
             subject = "Payment Confirmation - Edura"
             template_name = "payment_confirm.html"
@@ -108,7 +121,7 @@ def process_message(ch, method, properties, body):
 
         # Send Email via SMTP
         try:
-            send_email(to_email=email, subject=subject, html_body=html_body)
+            send_email(to_email=email, subject=subject, html_body=html_body, attachments=attachments)
 
             log_entry = NotificationLog(
                 recipient_id=recipient_id,
@@ -181,6 +194,7 @@ def start_consumer():
                 "auth.otp-requested",
                 "auth.password-reset-requested",
                 "auth.password-changed",
+                "report.progress",
                 "payment.success",
                 "certificate.issued",
                 "proctoring.violation",
@@ -216,6 +230,7 @@ def prepare_database():
     statements = (
         "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'password_reset_requested'",
         "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'password_changed'",
+        "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'progress_report'",
     )
     try:
         # ADD VALUE can't run inside a transaction block on older Postgres.

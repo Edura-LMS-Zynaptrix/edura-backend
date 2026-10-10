@@ -411,6 +411,46 @@ async def students_internal(
     ]
 
 
+@router.get("/internal/profiles/{user_id}")
+def profile_internal(user_id: int, db: Session = Depends(get_db)):
+    """Service-to-service only (blocked at the gateway): a profile for reports."""
+    p = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail={"error": "USER_NOT_FOUND"})
+    return {
+        "user_id": p.user_id,
+        "role": p.role.value,
+        "full_name": f"{p.first_name} {p.last_name}".strip(),
+        "grade": p.grade,
+        "school": p.school,
+        "district": p.district,
+        "mobile_no": p.mobile_no,
+    }
+
+
+@router.get("/internal/profiles")
+def profiles_internal(
+    ids: str = Query(..., description="Comma-separated auth user ids"),
+    db: Session = Depends(get_db),
+):
+    """Service-to-service only (blocked at the gateway): leaderboard details for many users."""
+    try:
+        wanted = [int(x) for x in ids.split(",") if x.strip()][:500]
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_IDS"})
+    return [
+        {
+            "user_id": p.user_id,
+            "role": p.role.value,
+            "full_name": f"{p.first_name} {p.last_name}".strip(),
+            "school": p.school,
+            "district": p.district,
+            "grade": p.grade,
+        }
+        for p in db.query(UserProfile).filter(UserProfile.user_id.in_(wanted))
+    ]
+
+
 @router.get("/internal/names")
 async def profile_names_internal(
     ids: str = Query(..., description="Comma-separated auth user ids"),

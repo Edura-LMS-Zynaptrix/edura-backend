@@ -1,6 +1,7 @@
 import logging
 import os
 import smtplib
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -29,17 +30,27 @@ def render_email(template_name: str, context: dict) -> str:
     return template.render(**context)
 
 
-def send_email(to_email: str, subject: str, html_body: str) -> None:
+def send_email(to_email: str, subject: str, html_body: str, attachments: list[dict] | None = None) -> None:
     """
     Dispatches an HTML email via SMTP based on environment configuration.
+
+    attachments: [{"filename": str, "data": bytes, "subtype": "pdf"}] (subtype optional).
     """
-    msg = MIMEMultipart("alternative")
+    if attachments:
+        msg = MIMEMultipart("mixed")
+        body = MIMEMultipart("alternative")
+        body.attach(MIMEText(html_body, "html"))
+        msg.attach(body)
+        for item in attachments:
+            part = MIMEApplication(item["data"], _subtype=item.get("subtype", "octet-stream"))
+            part.add_header("Content-Disposition", "attachment", filename=item["filename"])
+            msg.attach(part)
+    else:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(html_body, "html"))
     msg["Subject"] = subject
     msg["From"] = SMTP_FROM_EMAIL
     msg["To"] = to_email
-
-    html_part = MIMEText(html_body, "html")
-    msg.attach(html_part)
 
     logger.info(f"Connecting to SMTP server at {SMTP_HOST}:{SMTP_PORT}...")
     if SMTP_USE_TLS:

@@ -2,8 +2,9 @@ from datetime import datetime, timezone
 
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.concurrency import run_in_threadpool
 from models import ClassEnrollment, ClassPackage, Enrollment, EnrollmentStatus, LessonAccess
-from package_access import course_access, grant_package, has_access, lesson_grants
+from package_access import active_packages, course_access, grant_package, has_access, lesson_grants, package_covers
 from schemas import (
     AccessEnrolledStudent,
     AccessGrantRequest,
@@ -13,7 +14,7 @@ from schemas import (
     ClassPackageUpdate,
     EnrollmentResponse,
 )
-from service_clients import allowed_student_grades, course_info, names, streams, students
+from service_clients import allowed_student_grades, course_info, names, published_courses, streams, students
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -51,6 +52,31 @@ def list_my_enrollments(
         EnrollmentResponse.from_orm_model(e)
         for e in q.order_by(Enrollment.enrolled_at.desc()).all()
     ] + [EnrollmentResponse.from_lesson_access(g) for g in grants.all()]
+
+
+def _stored_access(db: Session, student_id: int):
+    courses = {
+        cid for (cid,) in db.query(Enrollment.course_id).filter(
+            Enrollment.student_id == student_id, Enrollment.status == EnrollmentStatus.ACTIVE
+        )
+    }
+    grants = db.query(LessonAccess.course_id, LessonAccess.module_id).filter(
+        LessonAccess.student_id == student_id
+    ).all()
+    return courses, active_packages(db, student_id), grants
+
+
+@router.get("/internal/students/{student_id}/accessible")
+async def accessible_internal(student_id: int, db: Session = Depends(get_db)):
+    """Service-to-service only: whole courses the student can open, plus lessons granted on their own."""
+    # The queries run off the event loop so concurrent callers aren't serialized behind them.
+    courses, packages, grants = await run_in_threadpool(_stored_access, db, student_id)
+    if packages:
+        for course in await published_courses():
+            if any(package_covers(p.grade, p.stream_id, course) for p in packages):
+                courses.add(course["id"])
+    lessons = [module_id for (course_id, module_id) in grants if course_id not in courses]
+    return {"course_ids": sorted(courses), "lesson_ids": sorted(lessons)}
 
 
 @router.get("/internal/access")

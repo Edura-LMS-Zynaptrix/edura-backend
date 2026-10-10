@@ -1,10 +1,16 @@
+import base64
 import json
 import logging
 import os
+import re
 
+import progress
 import redis
-from fastapi import APIRouter, Depends
-from service_clients import fetch_platform_sources
+from events import publish_event
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
+from report import generate_report_pdf, now_local
+from service_clients import SourceUnavailable, account, fetch_platform_sources
 
 from shared.auth import require_role
 
@@ -14,6 +20,8 @@ router = APIRouter()
 
 _STATS_CACHE_KEY = "analytics:platform-stats"
 _STATS_TTL_SECONDS = 300
+_SUMMARY_CACHE_KEY = "analytics:progress-summary"
+_SUMMARY_TTL_SECONDS = 60
 
 try:
     _redis = redis.Redis(
@@ -26,21 +34,26 @@ except Exception:  # pragma: no cover - construction never touches the network
     _redis = None
 
 
-def _cache_get():
+def _cache_get(key: str = _STATS_CACHE_KEY):
     try:
-        raw = _redis.get(_STATS_CACHE_KEY) if _redis else None
+        raw = _redis.get(key) if _redis else None
         return json.loads(raw) if raw else None
     except Exception as e:
-        logger.warning("Stats cache read failed: %s", e)
+        logger.warning("Cache read failed (%s): %s", key, e)
         return None
 
 
-def _cache_set(value: dict) -> None:
+def _cache_set(value, key: str = _STATS_CACHE_KEY, ttl: int = _STATS_TTL_SECONDS) -> None:
     try:
         if _redis:
-            _redis.set(_STATS_CACHE_KEY, json.dumps(value), ex=_STATS_TTL_SECONDS)
+            _redis.set(key, json.dumps(value), ex=ttl)
     except Exception as e:
-        logger.warning("Stats cache write failed: %s", e)
+        logger.warning("Cache write failed (%s): %s", key, e)
+
+
+def _unavailable(e: SourceUnavailable) -> HTTPException:
+    logger.error("Progress view unavailable: %s", e)
+    return HTTPException(status_code=503, detail={"error": "SOURCE_UNAVAILABLE"})
 
 
 @router.get("/analytics")
@@ -82,3 +95,84 @@ async def platform_stats():
     }
     _cache_set(stats)
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Student progress (static /students/progress-summary sits above /students/{user_id}/...)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/students/progress-summary")
+async def students_progress_summary(_: dict = Depends(require_role(["admin"]))):
+    cached = _cache_get(_SUMMARY_CACHE_KEY)
+    if cached is not None:
+        return cached
+    try:
+        summary = await progress.progress_summary()
+    except SourceUnavailable as e:
+        raise _unavailable(e)
+    _cache_set(summary, _SUMMARY_CACHE_KEY, _SUMMARY_TTL_SECONDS)
+    return summary
+
+
+async def _progress_or_404(user_id: int) -> dict:
+    try:
+        data = await progress.student_progress(user_id)
+    except SourceUnavailable as e:
+        raise _unavailable(e)
+    if data is None:
+        raise HTTPException(status_code=404, detail={"error": "STUDENT_NOT_FOUND"})
+    return data
+
+
+@router.get("/students/{user_id}/progress")
+async def student_progress(user_id: int, _: dict = Depends(require_role(["admin"]))):
+    return await _progress_or_404(user_id)
+
+
+@router.post("/students/{user_id}/send-report")
+async def send_student_report(user_id: int, _: dict = Depends(require_role(["admin"]))):
+    """Email the student a PDF of their progress (notification_service delivers it)."""
+    data = await _progress_or_404(user_id)
+    try:
+        user = await account(user_id)
+    except SourceUnavailable as e:
+        raise _unavailable(e)
+    if not user or not user.get("email"):
+        raise HTTPException(status_code=404, detail={"error": "STUDENT_NOT_FOUND"})
+
+    pdf = await run_in_threadpool(generate_report_pdf, data)
+    now = now_local()
+    name = data["student"]["full_name"] or "Student"
+    published = await run_in_threadpool(publish_event, "report.progress", {
+        "user_id": user_id,
+        "email": user["email"],
+        "student_name": name,
+        "month": now.strftime("%B %Y"),
+        "filename": f"Progress_Report_{re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_')}_{now.strftime('%Y%m%d')}.pdf",
+        "pdf_base64": base64.b64encode(pdf).decode("ascii"),
+    })
+    if not published:
+        raise HTTPException(status_code=503, detail={"error": "REPORT_NOT_QUEUED"})
+    return {"message": f"Progress report sent to {user['email']}"}
+
+
+@router.get("/me/progress")
+async def my_progress(payload: dict = Depends(require_role(["student"]))):
+    return await _progress_or_404(int(payload["sub"]))
+
+
+# ---------------------------------------------------------------------------
+# Course struggle analysis
+# ---------------------------------------------------------------------------
+
+
+@router.get("/courses/{course_id}/struggle")
+async def course_struggle(course_id: int, _: dict = Depends(require_role(["admin"]))):
+    try:
+        data = await progress.course_struggle(course_id)
+    except SourceUnavailable as e:
+        raise _unavailable(e)
+    if data is None:
+        raise HTTPException(status_code=404, detail={"error": "COURSE_NOT_FOUND"})
+    return data

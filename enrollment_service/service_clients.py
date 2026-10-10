@@ -75,3 +75,13 @@ async def streams() -> dict[int, str]:
         logger.error("Stream lookup failed: %s", e)
         return {}
 
+
+async def published_courses() -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{COURSE_SERVICE_URL}/internal/published")
+        return r.json() if r.status_code == 200 else []
+    except Exception as e:
+        logger.error("Published course lookup failed: %r", e)
+        return []
+

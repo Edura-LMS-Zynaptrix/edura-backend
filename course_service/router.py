@@ -315,7 +315,7 @@ async def list_published_internal(db: Session = Depends(get_db)):
 
 
 @router.get("/internal/titles")
-async def course_titles_internal(
+def course_titles_internal(
     ids: str = Query(..., description="Comma-separated course ids"),
     db: Session = Depends(get_db),
 ):
@@ -340,6 +340,16 @@ async def course_info_internal(course_id: int, db: Session = Depends(get_db)):
         "course_type": course.course_type.value if hasattr(course.course_type, "value") else course.course_type,
         "status": course.status.value if hasattr(course.status, "value") else course.status,
     }
+
+
+@router.get("/internal/courses/{course_id}/modules")
+def course_modules_internal(course_id: int, db: Session = Depends(get_db)):
+    """Service-to-service only (blocked at the gateway): the lessons of a course, active or not."""
+    _get_course_or_404(course_id, db)
+    return [
+        {"id": m.id, "title": m.title, "order": m.position}
+        for m in db.query(Module).filter(Module.course_id == course_id).order_by(Module.position, Module.id)
+    ]
 
 
 @router.get("/{course_id}/owner", response_model=CourseOwnerResponse)

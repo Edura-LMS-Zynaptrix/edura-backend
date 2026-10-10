@@ -8,3 +8,4 @@ PyJWT[crypto]>=2.8.0
 redis
 pika
 httpx
+reportlab

@@ -12,6 +12,8 @@ from badges import evaluate_after_attempt
 from bulk_import import apply_question_images, bulk_import, import_question_rows, safe_zip, template_zip
 from enrollment_client import is_enrolled
 from events import publish_assessment_graded
+from rankings import rank_rows
+from user_client import get_profiles
 from fastapi import (
     APIRouter,
     Depends,
@@ -59,7 +61,7 @@ from schemas import (
     UserBadgeResponse,
     ViolationRequest,
 )
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from shared.auth import get_optional_payload, require_role
@@ -303,6 +305,100 @@ async def list_assessments(
     return [_to_response(a, counts.get(a.id, 0)) for a in assessments]
 
 
+def _int_list(raw: str | None) -> list[int]:
+    try:
+        return [int(x) for x in (raw or "").split(",") if x.strip()][:500]
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"error": "INVALID_IDS"})
+
+
+@router.get("/internal/students/{student_id}/exam-progress")
+def student_exam_progress_internal(
+    student_id: int,
+    course_ids: str | None = Query(None, description="Courses the student can open in full"),
+    lesson_ids: str | None = Query(None, description="Single lessons granted on their own"),
+    db: Session = Depends(get_db),
+):
+    """Service-to-service only: every published exam the student can take, with their graded attempts."""
+    courses, lessons = _int_list(course_ids), _int_list(lesson_ids)
+    if not courses and not lessons:
+        return []
+    q = db.query(Assessment).filter(Assessment.is_published.is_(True))
+    if courses and lessons:
+        q = q.filter(Assessment.course_id.in_(courses) | Assessment.module_id.in_(lessons))
+    elif courses:
+        q = q.filter(Assessment.course_id.in_(courses))
+    else:
+        q = q.filter(Assessment.module_id.in_(lessons))
+    exams = q.order_by(Assessment.course_id, Assessment.position, Assessment.id).all()
+    if not exams:
+        return []
+    ids = [e.id for e in exams]
+    questions_by_exam: dict[int, list[Question]] = {}
+    for question in db.query(Question).filter(Question.assessment_id.in_(ids)):
+        questions_by_exam.setdefault(question.assessment_id, []).append(question)
+    attempts_by_exam: dict[int, list[dict]] = {}
+    for sub in (
+        db.query(Submission)
+        .filter(
+            Submission.student_id == student_id,
+            Submission.assessment_id.in_(ids),
+            Submission.status == SubmissionStatus.graded,
+        )
+        .order_by(Submission.submitted_at, Submission.id)
+    ):
+        questions = questions_by_exam.get(sub.assessment_id, [])
+        attempts_by_exam.setdefault(sub.assessment_id, []).append({
+            "id": sub.id,
+            "score_pct": round(float(sub.score or 0)),
+            "marks_obtained": _correct_count(questions, _answers_of(sub)),
+            "total_questions": len(questions),
+            "time_seconds": _time_taken(sub),
+            "submitted_at": sub.submitted_at.isoformat() if sub.submitted_at else None,
+        })
+    return [
+        {
+            "id": e.id,
+            "title": e.title,
+            "course_id": e.course_id,
+            "module_id": e.module_id,
+            "order_number": e.position or 0,
+            "attempts": attempts_by_exam.get(e.id, []),
+        }
+        for e in exams
+    ]
+
+
+@router.get("/internal/students/{student_id}/badge-count")
+def student_badge_count_internal(student_id: int, db: Session = Depends(get_db)):
+    return {"count": db.query(UserBadge).filter(UserBadge.student_id == student_id).count()}
+
+
+@router.get("/internal/courses/{course_id}/first-attempts")
+def course_first_attempts_internal(course_id: int, db: Session = Depends(get_db)):
+    """Service-to-service only: each student's FIRST graded attempt per exam (struggle analysis)."""
+    exams = db.query(Assessment).filter(Assessment.course_id == course_id).all()
+    if not exams:
+        return {"exams": [], "attempts": []}
+    first: dict[tuple[int, int], Submission] = {}
+    for sub in (
+        db.query(Submission)
+        .filter(
+            Submission.assessment_id.in_([e.id for e in exams]),
+            Submission.status == SubmissionStatus.graded,
+        )
+        .order_by(Submission.submitted_at, Submission.id)
+    ):
+        first.setdefault((sub.student_id, sub.assessment_id), sub)
+    return {
+        "exams": [{"id": e.id, "title": e.title, "module_id": e.module_id} for e in exams],
+        "attempts": [
+            {"student_id": sid, "exam_id": eid, "score_pct": float(sub.score or 0)}
+            for (sid, eid), sub in first.items()
+        ],
+    }
+
+
 @router.get("/internal/stats")
 async def assessment_stats_internal(db: Session = Depends(get_db)):
     """Service-to-service only (blocked at the gateway): counts for the public homepage."""
@@ -311,6 +407,137 @@ async def assessment_stats_internal(db: Session = Depends(get_db)):
         "graded_attempts": db.query(Submission)
         .filter(Submission.status == SubmissionStatus.graded)
         .count(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rankings (public, static paths, so they sit above GET /{assessment_id})
+# ---------------------------------------------------------------------------
+
+
+def _get_published_or_404(assessment_id: int, db: Session) -> Assessment:
+    assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+    if not assessment or not assessment.is_published:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "ASSESSMENT_NOT_FOUND", "message": "Assessment not found"},
+        )
+    return assessment
+
+
+async def _exam_board(assessment_id: int, db: Session) -> list[dict]:
+    """Ranked first attempts for one exam, students only."""
+    first: dict[int, Submission] = {}
+    for sub in (
+        db.query(Submission)
+        .filter(
+            Submission.assessment_id == assessment_id,
+            Submission.status == SubmissionStatus.graded,
+        )
+        .order_by(Submission.submitted_at, Submission.id)
+    ):
+        first.setdefault(sub.student_id, sub)
+    if not first:
+        return []
+    profiles = await get_profiles(list(first))
+    rows = []
+    for student_id, sub in first.items():
+        profile = (profiles or {}).get(student_id)
+        # Staff test attempts stay off the board; if user_service is down, show everyone unnamed.
+        if profiles is not None and (not profile or str(profile.get("role", "")).lower() != "student"):
+            continue
+        profile = profile or {}
+        rows.append({
+            "student_id": student_id,
+            "score": float(sub.score or 0),
+            "time_seconds": _time_taken(sub),
+            "full_name": profile.get("full_name") or "Student",
+            "school": profile.get("school") or "",
+            "district": profile.get("district") or "",
+            "grade": profile.get("grade") or 0,
+        })
+    return rank_rows(rows)
+
+
+@router.get("/rankings/exams")
+async def ranking_exams(
+    payload: dict | None = Depends(get_optional_payload),
+    db: Session = Depends(get_db),
+):
+    """Published exams with at least one graded attempt; a signed-in student sees only exams they sat."""
+    attempted = select(Submission.assessment_id).where(Submission.status == SubmissionStatus.graded)
+    if payload and str(payload.get("role", "")).lower() == "student":
+        attempted = attempted.where(Submission.student_id == int(payload["sub"]))
+    exams = (
+        db.query(Assessment)
+        .filter(Assessment.is_published.is_(True), Assessment.id.in_(attempted.distinct()))
+        .all()
+    )
+    titles = await get_course_titles([e.course_id for e in exams])
+    rows = [
+        {
+            "exam_id": str(e.id),
+            "exam_title": e.title,
+            "course_title": titles.get(e.course_id, ""),
+            "subject": titles.get(e.course_id, ""),
+        }
+        for e in exams
+    ]
+    return sorted(rows, key=lambda r: (r["course_title"], r["exam_title"]))
+
+
+@router.get("/rankings/leaderboard")
+async def ranking_leaderboard(
+    exam_id: int,
+    district: str | None = Query(None, max_length=100),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    payload: dict | None = Depends(get_optional_payload),
+    db: Session = Depends(get_db),
+):
+    """Public leaderboard of one exam (first attempts). Island and district ranks."""
+    _get_published_or_404(exam_id, db)
+    board = await _exam_board(exam_id, db)
+    if district and district.strip():
+        wanted = district.strip().lower()
+        board = [r for r in board if wanted in r["district"].lower()]
+    me = int(payload["sub"]) if payload else None
+    return [
+        {
+            "rank": r["rank"],
+            "district_rank": r["district_rank"],
+            "full_name": r["full_name"],
+            "school": r["school"],
+            "district": r["district"],
+            "grade": r["grade"],
+            "score": round(r["score"]),
+            "time_taken_seconds": r["time_seconds"],
+            "attempts": 1,
+            "is_current_user": r["student_id"] == me,
+        }
+        for r in board[offset : offset + limit]
+    ]
+
+
+@router.get("/rankings/exam/{exam_id}")
+async def my_exam_rank(
+    exam_id: int,
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """The caller's island and district rank on one exam (null until they've sat it)."""
+    assessment = _get_published_or_404(exam_id, db)
+    me = int(payload["sub"])
+    mine = next((r for r in await _exam_board(exam_id, db) if r["student_id"] == me), None)
+    title = (await get_course_titles([assessment.course_id])).get(assessment.course_id, "")
+    return {
+        "exam_id": str(assessment.id),
+        "course_id": str(assessment.course_id),
+        "exam_title": assessment.title,
+        "course_title": title,
+        "subject": title,
+        "overall_rank": mine["rank"] if mine else None,
+        "district_rank": mine["district_rank"] if mine else None,
     }
 
 
