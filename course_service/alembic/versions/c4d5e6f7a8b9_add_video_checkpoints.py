@@ -24,9 +24,16 @@ def upgrade() -> None:
         sa.Column("course_id", sa.Integer(), nullable=False),
         sa.Column("lesson_id", sa.Integer(), nullable=False),
         sa.Column("timestamp_seconds", sa.Integer(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
     )
-    op.create_index("ix_video_checkpoints_lesson_id", "video_checkpoints", ["lesson_id"])
+    op.create_index(
+        "ix_video_checkpoints_lesson_id", "video_checkpoints", ["lesson_id"]
+    )
     op.create_table(
         "checkpoint_questions",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -41,11 +48,17 @@ def upgrade() -> None:
         sa.Column("explanation", sa.Text(), nullable=True),
         sa.Column("order_number", sa.Integer(), nullable=False, server_default="0"),
     )
-    op.create_index("ix_checkpoint_questions_checkpoint_id", "checkpoint_questions", ["checkpoint_id"])
+    op.create_index(
+        "ix_checkpoint_questions_checkpoint_id",
+        "checkpoint_questions",
+        ["checkpoint_id"],
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_checkpoint_questions_checkpoint_id", table_name="checkpoint_questions")
+    op.drop_index(
+        "ix_checkpoint_questions_checkpoint_id", table_name="checkpoint_questions"
+    )
     op.drop_table("checkpoint_questions")
     op.drop_index("ix_video_checkpoints_lesson_id", table_name="video_checkpoints")
     op.drop_table("video_checkpoints")

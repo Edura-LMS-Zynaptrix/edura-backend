@@ -13,14 +13,18 @@ EXCHANGE = "edura.events"
 def publish_event(routing_key: str, payload: dict) -> bool:
     """Publish to the shared topic exchange (notification_service sends the email). True on success."""
     try:
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=RABBITMQ_HOST)
+        )
         channel = connection.channel()
         channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
         channel.basic_publish(
             exchange=EXCHANGE,
             routing_key=routing_key,
             body=json.dumps(payload),
-            properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"),
+            properties=pika.BasicProperties(
+                delivery_mode=2, content_type="application/json"
+            ),
         )
         connection.close()
         logger.info("Published %s for user_id=%s", routing_key, payload.get("user_id"))

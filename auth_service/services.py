@@ -60,7 +60,9 @@ except Exception:
 
 class TokenService:
     @staticmethod
-    def create_access_token(user_id: int, role: str, email: Optional[str] = None) -> str:
+    def create_access_token(
+        user_id: int, role: str, email: Optional[str] = None
+    ) -> str:
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
@@ -199,7 +201,9 @@ class PasswordResetService:
 
     @staticmethod
     def _fingerprint(hashed_password: Optional[str]) -> str:
-        return hashlib.sha256((hashed_password or "no-password").encode()).hexdigest()[:16]
+        return hashlib.sha256((hashed_password or "no-password").encode()).hexdigest()[
+            :16
+        ]
 
     @staticmethod
     def create_token(user_id: int, hashed_password: Optional[str]) -> str:
@@ -217,7 +221,9 @@ class PasswordResetService:
     def read_token(token: str) -> Optional[Tuple[int, str]]:
         """Returns (user_id, password fingerprint) or None when invalid/expired."""
         try:
-            data = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            data = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
         except jwt.PyJWTError:
             return None
         if data.get("purpose") != PasswordResetService.PURPOSE:

@@ -289,9 +289,15 @@ def test_process_progress_report_attaches_pdf():
 
     db = TestingSessionLocal()
     try:
-        log = db.query(NotificationLog).filter_by(recipient_email="nimal@example.com").first()
+        log = (
+            db.query(NotificationLog)
+            .filter_by(recipient_email="nimal@example.com")
+            .first()
+        )
         assert log.event_type == NotificationEvent.progress_report
         assert log.status == NotificationStatus.sent
-        assert "%PDF" not in log.body  # the log keeps the email body, not the attachment
+        assert (
+            "%PDF" not in log.body
+        )  # the log keeps the email body, not the attachment
     finally:
         db.close()

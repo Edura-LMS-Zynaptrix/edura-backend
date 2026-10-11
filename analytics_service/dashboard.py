@@ -21,27 +21,37 @@ def build_stats(src: dict, names: dict[int, str], titles: dict[int, str]) -> dic
     activity = []
     for s in users.get("recent_students", []):
         name = s.get("full_name") or "A student"
-        activity.append({
-            "type": "student",
-            "title": "New student registration",
-            "subtitle": f"{name} joined from {s['district']}" if s.get("district") else f"{name} joined",
-            "timestamp": s.get("created_at"),
-        })
+        activity.append(
+            {
+                "type": "student",
+                "title": "New student registration",
+                "subtitle": (
+                    f"{name} joined from {s['district']}"
+                    if s.get("district")
+                    else f"{name} joined"
+                ),
+                "timestamp": s.get("created_at"),
+            }
+        )
     for p in payments.get("recent_verified", []):
-        activity.append({
-            "type": "payment",
-            "title": "Payment verified",
-            "subtitle": f"Bank slip verified for {names.get(p['student_id'], 'Unknown')}",
-            "timestamp": p.get("verified_at"),
-        })
+        activity.append(
+            {
+                "type": "payment",
+                "title": "Payment verified",
+                "subtitle": f"Bank slip verified for {names.get(p['student_id'], 'Unknown')}",
+                "timestamp": p.get("verified_at"),
+            }
+        )
     for e in assessments.get("recent_exams", []):
         course = titles.get(e["course_id"])
-        activity.append({
-            "type": "exam",
-            "title": "New exam uploaded",
-            "subtitle": f"{e['title']} — {course}" if course else e["title"],
-            "timestamp": e.get("created_at"),
-        })
+        activity.append(
+            {
+                "type": "exam",
+                "title": "New exam uploaded",
+                "subtitle": f"{e['title']} — {course}" if course else e["title"],
+                "timestamp": e.get("created_at"),
+            }
+        )
     activity.sort(key=lambda item: _when(item["timestamp"]), reverse=True)
 
     return {
@@ -58,6 +68,7 @@ def build_stats(src: dict, names: dict[int, str], titles: dict[int, str]) -> dic
 
 def build_analytics(src: dict, courses: dict[int, dict]) -> dict:
     """courses: {id: {"title", "grade"}} for every course the figures mention."""
+
     def title(course_id):
         return (courses.get(course_id) or {}).get("title") or "Untitled course"
 
@@ -65,7 +76,9 @@ def build_analytics(src: dict, courses: dict[int, dict]) -> dict:
     for row in src["enrollments"]:
         if row["course_id"] not in courses:
             continue  # enrollments left behind by a deleted course
-        by_subject[title(row["course_id"])] = by_subject.get(title(row["course_id"]), 0) + row["count"]
+        by_subject[title(row["course_id"])] = (
+            by_subject.get(title(row["course_id"]), 0) + row["count"]
+        )
 
     return {
         "revenue_by_month": src["payments"].get("revenue_by_month", []),
@@ -105,7 +118,9 @@ async def admin_stats() -> dict:
     src = await clients.admin_sources()
     student_ids = [p["student_id"] for p in src["payments"].get("recent_verified", [])]
     course_ids = {e["course_id"] for e in src["assessments"].get("recent_exams", [])}
-    names, courses = await asyncio.gather(clients.names(student_ids), _courses_for(src, course_ids))
+    names, courses = await asyncio.gather(
+        clients.names(student_ids), _courses_for(src, course_ids)
+    )
     return build_stats(src, names, {cid: c["title"] for cid, c in courses.items()})
 
 

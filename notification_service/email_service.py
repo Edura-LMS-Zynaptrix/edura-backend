@@ -30,7 +30,9 @@ def render_email(template_name: str, context: dict) -> str:
     return template.render(**context)
 
 
-def send_email(to_email: str, subject: str, html_body: str, attachments: list[dict] | None = None) -> None:
+def send_email(
+    to_email: str, subject: str, html_body: str, attachments: list[dict] | None = None
+) -> None:
     """
     Dispatches an HTML email via SMTP based on environment configuration.
 
@@ -42,8 +44,12 @@ def send_email(to_email: str, subject: str, html_body: str, attachments: list[di
         body.attach(MIMEText(html_body, "html"))
         msg.attach(body)
         for item in attachments:
-            part = MIMEApplication(item["data"], _subtype=item.get("subtype", "octet-stream"))
-            part.add_header("Content-Disposition", "attachment", filename=item["filename"])
+            part = MIMEApplication(
+                item["data"], _subtype=item.get("subtype", "octet-stream")
+            )
+            part.add_header(
+                "Content-Disposition", "attachment", filename=item["filename"]
+            )
             msg.attach(part)
     else:
         msg = MIMEMultipart("alternative")

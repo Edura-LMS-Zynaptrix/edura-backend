@@ -109,7 +109,9 @@ async def init_checkout(
 # ---------------------------------------------------------------------------
 # POST /free-enroll — Instant enrollment for price=0 courses
 # ---------------------------------------------------------------------------
-@router.post("/free-enroll", response_model=FreeEnrollResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/free-enroll", response_model=FreeEnrollResponse, status_code=status.HTTP_200_OK
+)
 async def free_enroll(
     body: FreeEnrollRequest,
     payload: dict = Depends(require_role(["student"])),
@@ -132,7 +134,10 @@ async def free_enroll(
     if price != 0:
         raise HTTPException(
             status_code=400,
-            detail={"error": "COURSE_NOT_FREE", "message": "This course is not free — use checkout instead."},
+            detail={
+                "error": "COURSE_NOT_FREE",
+                "message": "This course is not free — use checkout instead.",
+            },
         )
 
     existing = (
@@ -145,7 +150,9 @@ async def free_enroll(
         .first()
     )
     if existing:
-        return FreeEnrollResponse(message="Already enrolled", course_id=body.course_id, payment_id=existing.id)
+        return FreeEnrollResponse(
+            message="Already enrolled", course_id=body.course_id, payment_id=existing.id
+        )
 
     payment = Payment(
         student_id=student_id,
@@ -167,7 +174,9 @@ async def free_enroll(
         amount=0,
     )
 
-    return FreeEnrollResponse(message="Enrolled successfully", course_id=body.course_id, payment_id=payment.id)
+    return FreeEnrollResponse(
+        message="Enrolled successfully", course_id=body.course_id, payment_id=payment.id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +295,9 @@ async def upload_manual_receipt(
         )
 
     # Uploaded to Cloudinary via content_service, which owns the integration
-    receipt_filename = f"{student_id}_{course_id}_{uuid.uuid4().hex[:8]}_{file.filename}"
+    receipt_filename = (
+        f"{student_id}_{course_id}_{uuid.uuid4().hex[:8]}_{file.filename}"
+    )
     receipt_url, receipt_public_id = await upload_receipt(content, receipt_filename)
 
     # Create Payment record with MANUAL method and PENDING status
@@ -350,10 +361,14 @@ async def list_receipts(
     payload: dict = Depends(require_role(["admin"])),
     db: Session = Depends(get_db),
 ):
-    q = db.query(PaymentReceipt, Payment).join(Payment, PaymentReceipt.payment_id == Payment.id)
+    q = db.query(PaymentReceipt, Payment).join(
+        Payment, PaymentReceipt.payment_id == Payment.id
+    )
     if status_filter:
         try:
-            q = q.filter(PaymentReceipt.receipt_status == ReceiptStatus(status_filter.upper()))
+            q = q.filter(
+                PaymentReceipt.receipt_status == ReceiptStatus(status_filter.upper())
+            )
         except ValueError:
             raise HTTPException(status_code=422, detail={"error": "INVALID_STATUS"})
     rows = q.order_by(PaymentReceipt.created_at.desc()).all()
@@ -389,7 +404,10 @@ async def verify_receipt(
     if receipt.receipt_status != ReceiptStatus.PENDING:
         raise HTTPException(
             status_code=400,
-            detail={"error": "ALREADY_REVIEWED", "message": "This receipt has already been reviewed"},
+            detail={
+                "error": "ALREADY_REVIEWED",
+                "message": "This receipt has already been reviewed",
+            },
         )
 
     payment = db.query(Payment).filter(Payment.id == receipt.payment_id).first()
@@ -456,7 +474,9 @@ SL_TIME = timezone(timedelta(hours=5, minutes=30))
 
 
 def _sl(moment: datetime) -> datetime:
-    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).astimezone(SL_TIME)
+    return (
+        moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    ).astimezone(SL_TIME)
 
 
 @router.get("/internal/admin-stats")
@@ -491,13 +511,20 @@ def admin_stats_internal(db: Session = Depends(get_db)):
         "revenue_this_month": round(months.get((now.year, now.month), [0.0])[0], 2),
         "pending_bank_slips": db.query(func.count(PaymentReceipt.id))
         .filter(PaymentReceipt.receipt_status == ReceiptStatus.PENDING)
-        .scalar() or 0,
+        .scalar()
+        or 0,
         "revenue_by_month": [
-            {"year": y, "month": m, "revenue": round(months[(y, m)][0]), "count": months[(y, m)][1]}
+            {
+                "year": y,
+                "month": m,
+                "revenue": round(months[(y, m)][0]),
+                "count": months[(y, m)][1],
+            }
             for (y, m) in sorted(months)[-12:]
         ],
         "recent_verified": [
-            {"student_id": student_id, "verified_at": reviewed.isoformat()} for student_id, reviewed in recent
+            {"student_id": student_id, "verified_at": reviewed.isoformat()}
+            for student_id, reviewed in recent
         ],
     }
 
@@ -518,10 +545,14 @@ def list_all_bank_accounts(
     _: dict = Depends(require_role(["admin"])),
     db: Session = Depends(get_db),
 ):
-    return db.query(BankAccount).order_by(BankAccount.order_number, BankAccount.id).all()
+    return (
+        db.query(BankAccount).order_by(BankAccount.order_number, BankAccount.id).all()
+    )
 
 
-@router.post("/admin/bank-accounts", response_model=BankAccountResponse, status_code=201)
+@router.post(
+    "/admin/bank-accounts", response_model=BankAccountResponse, status_code=201
+)
 def create_bank_account(
     body: BankAccountCreate,
     _: dict = Depends(require_role(["admin"])),
@@ -557,4 +588,3 @@ def delete_bank_account(
 ):
     db.delete(_get_bank_account_or_404(account_id, db))
     db.commit()
-

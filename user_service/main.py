@@ -13,8 +13,16 @@ logger = logging.getLogger(__name__)
 # O/L core subjects (grades 6-11) and A/L streams (grades 12-13) — seeded once
 # so the registration form has real choices instead of an empty catalogue.
 _OL_SUBJECTS = [
-    "Sinhala", "English", "Mathematics", "Science", "History",
-    "Religion", "ICT", "Geography", "Civic Education", "Health & Physical Education",
+    "Sinhala",
+    "English",
+    "Mathematics",
+    "Science",
+    "History",
+    "Religion",
+    "ICT",
+    "Geography",
+    "Civic Education",
+    "Health & Physical Education",
 ]
 _AL_STREAMS = [
     ("Physical Science", ["Combined Mathematics", "Physics", "Chemistry"]),
@@ -45,6 +53,7 @@ def _seed_reference_data():
         db.rollback()
     finally:
         db.close()
+
 
 app = FastAPI(title="User Service")
 

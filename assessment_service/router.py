@@ -6,14 +6,18 @@ import random
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from badges import evaluate_after_attempt
+from bulk_import import (
+    apply_question_images,
+    bulk_import,
+    import_question_rows,
+    safe_zip,
+    template_zip,
+)
 from course_client import get_course_instructor_id, get_course_titles
 from database import get_db
-from badges import evaluate_after_attempt
-from bulk_import import apply_question_images, bulk_import, import_question_rows, safe_zip, template_zip
 from enrollment_client import is_enrolled
 from events import publish_assessment_graded
-from rankings import rank_rows
-from user_client import get_profiles
 from fastapi import (
     APIRouter,
     Depends,
@@ -26,8 +30,8 @@ from fastapi import (
 )
 from models import (
     Assessment,
-    Badge,
     AssessmentType,
+    Badge,
     Question,
     QuestionType,
     Submission,
@@ -36,15 +40,16 @@ from models import (
     ViolationLog,
     ViolationType,
 )
+from rankings import rank_rows
 from redis_client import get_redis_client
 from schemas import (
     AssessmentCreate,
     AssessmentResponse,
     AssessmentUpdate,
     AttemptRanking,
+    AttemptReviewResponse,
     BadgeDashboardResponse,
     BadgeResponse,
-    AttemptReviewResponse,
     CsvImportResult,
     MyAttemptItem,
     MyAttemptSummary,
@@ -63,6 +68,7 @@ from schemas import (
 )
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from user_client import get_profiles
 
 from shared.auth import get_optional_payload, require_role
 
@@ -117,7 +123,9 @@ def _build_review(questions: list[Question], answers_dict: dict) -> list[ReviewI
                         option_image_url=img["url"] if img else None,
                         order_number=idx,
                     )
-                    for idx, (text, img) in enumerate(zip(option_texts, images))
+                    for idx, (text, img) in enumerate(
+                        zip(option_texts, images, strict=False)
+                    )
                 ],
             )
         )
@@ -140,19 +148,31 @@ def _correct_count(questions: list[Question], answers: dict[int, str]) -> int:
         1
         for q in questions
         if q.question_type in (QuestionType.mcq, QuestionType.true_false)
-        and (answers.get(q.id) or "").strip().lower() == str(q.correct_answer).strip().lower()
+        and (answers.get(q.id) or "").strip().lower()
+        == str(q.correct_answer).strip().lower()
     )
 
 
 def _time_taken(submission: Submission) -> int:
     if submission.started_at and submission.submitted_at:
-        return max(0, int((submission.submitted_at - submission.started_at).total_seconds()))
+        return max(
+            0, int((submission.submitted_at - submission.started_at).total_seconds())
+        )
     return 0
 
 
-async def _my_ranks(assessment_id: int, student_id: int, db: Session) -> tuple[int | None, int | None]:
+async def _my_ranks(
+    assessment_id: int, student_id: int, db: Session
+) -> tuple[int | None, int | None]:
     """(island, district) place on the exam's leaderboard — the same first-attempt ranking /rankings shows."""
-    mine = next((r for r in await _exam_board(assessment_id, db) if r["student_id"] == student_id), None)
+    mine = next(
+        (
+            r
+            for r in await _exam_board(assessment_id, db)
+            if r["student_id"] == student_id
+        ),
+        None,
+    )
     return (mine["rank"], mine["district_rank"]) if mine else (None, None)
 
 
@@ -166,13 +186,16 @@ def _get_question_or_404(question_id: int, db: Session) -> Question:
     return question
 
 
-async def _assert_course_owner(course_id: int, requester_id: int, requester_role: str) -> None:
+async def _assert_course_owner(
+    course_id: int, requester_id: int, requester_role: str
+) -> None:
     if requester_role == "admin":
         return
     instructor_id = await get_course_instructor_id(course_id)
     if instructor_id is None:
         raise HTTPException(
-            status_code=404, detail={"error": "COURSE_NOT_FOUND", "message": "Parent course not found"}
+            status_code=404,
+            detail={"error": "COURSE_NOT_FOUND", "message": "Parent course not found"},
         )
     if instructor_id != requester_id:
         raise HTTPException(status_code=403, detail={"error": "NOT_COURSE_OWNER"})
@@ -193,7 +216,9 @@ def _question_counts(assessment_ids: list[int], db: Session) -> dict[int, int]:
     )
 
 
-def _to_response(a: Assessment, question_count: int | None = None, db: Session | None = None) -> AssessmentResponse:
+def _to_response(
+    a: Assessment, question_count: int | None = None, db: Session | None = None
+) -> AssessmentResponse:
     if question_count is None and db is not None:
         question_count = _question_counts([a.id], db).get(a.id, 0)
     return AssessmentResponse(
@@ -204,7 +229,9 @@ def _to_response(a: Assessment, question_count: int | None = None, db: Session |
         title=a.title,
         description=a.description,
         assessment_type=(
-            a.assessment_type.value if hasattr(a.assessment_type, "value") else a.assessment_type
+            a.assessment_type.value
+            if hasattr(a.assessment_type, "value")
+            else a.assessment_type
         ),
         time_limit_minutes=a.time_limit_minutes,
         max_score=a.max_score,
@@ -228,9 +255,11 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def _option_images_json(options) -> str | None:
     """Serialise option images aligned with the option list; None when no option has one."""
     images = [
-        {"url": o.option_image_url, "public_id": o.option_image_public_id}
-        if o.option_image_url
-        else None
+        (
+            {"url": o.option_image_url, "public_id": o.option_image_public_id}
+            if o.option_image_url
+            else None
+        )
         for o in options
     ]
     return json.dumps(images) if any(images) else None
@@ -255,7 +284,9 @@ def _question_to_admin_response(q: Question) -> QuestionAdminResponse:
         assessment_id=q.assessment_id,
         question_text=q.question_text,
         question_type=(
-            q.question_type.value if hasattr(q.question_type, "value") else str(q.question_type)
+            q.question_type.value
+            if hasattr(q.question_type, "value")
+            else str(q.question_type)
         ),
         options=options,
         option_images=_option_images(q, len(options)),
@@ -276,7 +307,9 @@ def _question_to_admin_response(q: Question) -> QuestionAdminResponse:
 @router.get("/", response_model=list[AssessmentResponse])
 async def list_assessments(
     course_id: int | None = Query(None),
-    module_id: int | None = Query(None, description="course_service module (lesson) id"),
+    module_id: int | None = Query(
+        None, description="course_service module (lesson) id"
+    ),
     payload: dict | None = Depends(get_optional_payload),
     db: Session = Depends(get_db),
 ):
@@ -284,7 +317,10 @@ async def list_assessments(
     if course_id is None and module_id is None:
         raise HTTPException(
             status_code=422,
-            detail={"error": "FILTER_REQUIRED", "message": "Provide course_id or module_id"},
+            detail={
+                "error": "FILTER_REQUIRED",
+                "message": "Provide course_id or module_id",
+            },
         )
     q = db.query(Assessment)
     if course_id is not None:
@@ -308,8 +344,12 @@ def _int_list(raw: str | None) -> list[int]:
 @router.get("/internal/students/{student_id}/exam-progress")
 def student_exam_progress_internal(
     student_id: int,
-    course_ids: str | None = Query(None, description="Courses the student can open in full"),
-    lesson_ids: str | None = Query(None, description="Single lessons granted on their own"),
+    course_ids: str | None = Query(
+        None, description="Courses the student can open in full"
+    ),
+    lesson_ids: str | None = Query(
+        None, description="Single lessons granted on their own"
+    ),
     db: Session = Depends(get_db),
 ):
     """Service-to-service only: every published exam the student can take, with their graded attempts."""
@@ -318,7 +358,9 @@ def student_exam_progress_internal(
         return []
     q = db.query(Assessment).filter(Assessment.is_published.is_(True))
     if courses and lessons:
-        q = q.filter(Assessment.course_id.in_(courses) | Assessment.module_id.in_(lessons))
+        q = q.filter(
+            Assessment.course_id.in_(courses) | Assessment.module_id.in_(lessons)
+        )
     elif courses:
         q = q.filter(Assessment.course_id.in_(courses))
     else:
@@ -341,14 +383,18 @@ def student_exam_progress_internal(
         .order_by(Submission.submitted_at, Submission.id)
     ):
         questions = questions_by_exam.get(sub.assessment_id, [])
-        attempts_by_exam.setdefault(sub.assessment_id, []).append({
-            "id": sub.id,
-            "score_pct": round(float(sub.score or 0)),
-            "marks_obtained": _correct_count(questions, _answers_of(sub)),
-            "total_questions": len(questions),
-            "time_seconds": _time_taken(sub),
-            "submitted_at": sub.submitted_at.isoformat() if sub.submitted_at else None,
-        })
+        attempts_by_exam.setdefault(sub.assessment_id, []).append(
+            {
+                "id": sub.id,
+                "score_pct": round(float(sub.score or 0)),
+                "marks_obtained": _correct_count(questions, _answers_of(sub)),
+                "total_questions": len(questions),
+                "time_seconds": _time_taken(sub),
+                "submitted_at": (
+                    sub.submitted_at.isoformat() if sub.submitted_at else None
+                ),
+            }
+        )
     return [
         {
             "id": e.id,
@@ -364,7 +410,9 @@ def student_exam_progress_internal(
 
 @router.get("/internal/students/{student_id}/badge-count")
 def student_badge_count_internal(student_id: int, db: Session = Depends(get_db)):
-    return {"count": db.query(UserBadge).filter(UserBadge.student_id == student_id).count()}
+    return {
+        "count": db.query(UserBadge).filter(UserBadge.student_id == student_id).count()
+    }
 
 
 @router.get("/internal/courses/{course_id}/first-attempts")
@@ -384,7 +432,9 @@ def course_first_attempts_internal(course_id: int, db: Session = Depends(get_db)
     ):
         first.setdefault((sub.student_id, sub.assessment_id), sub)
     return {
-        "exams": [{"id": e.id, "title": e.title, "module_id": e.module_id} for e in exams],
+        "exams": [
+            {"id": e.id, "title": e.title, "module_id": e.module_id} for e in exams
+        ],
         "attempts": [
             {"student_id": sid, "exam_id": eid, "score_pct": float(sub.score or 0)}
             for (sid, eid), sub in first.items()
@@ -400,27 +450,50 @@ def assessment_admin_stats_internal(db: Session = Depends(get_db)):
     """Service-to-service only (blocked at the gateway): exam figures for the admin dashboard."""
     graded = Submission.status == SubmissionStatus.graded
     months: dict[tuple[int, int], int] = {}
-    for (when,) in db.query(Submission.submitted_at).filter(graded, Submission.submitted_at.isnot(None)):
-        local = (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(SL_TIME)
+    for (when,) in db.query(Submission.submitted_at).filter(
+        graded, Submission.submitted_at.isnot(None)
+    ):
+        local = (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(
+            SL_TIME
+        )
         months[(local.year, local.month)] = months.get((local.year, local.month), 0) + 1
 
     top = (
-        db.query(Submission.assessment_id, func.count(Submission.id), func.avg(Submission.score))
+        db.query(
+            Submission.assessment_id,
+            func.count(Submission.id),
+            func.avg(Submission.score),
+        )
         .filter(graded)
         .group_by(Submission.assessment_id)
         .order_by(func.count(Submission.id).desc())
         .limit(8)
         .all()
     )
-    titles = {
-        a.id: a for a in db.query(Assessment).filter(Assessment.id.in_([row[0] for row in top])).all()
-    } if top else {}
-    recent = db.query(Assessment).order_by(Assessment.created_at.desc(), Assessment.id.desc()).limit(5).all()
+    titles = (
+        {
+            a.id: a
+            for a in db.query(Assessment)
+            .filter(Assessment.id.in_([row[0] for row in top]))
+            .all()
+        }
+        if top
+        else {}
+    )
+    recent = (
+        db.query(Assessment)
+        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
+        .limit(5)
+        .all()
+    )
     return {
-        "published_exams": db.query(Assessment).filter(Assessment.is_published.is_(True)).count(),
+        "published_exams": db.query(Assessment)
+        .filter(Assessment.is_published.is_(True))
+        .count(),
         "graded_attempts": db.query(Submission).filter(graded).count(),
         "attempts_by_month": [
-            {"year": y, "month": m, "count": months[(y, m)]} for (y, m) in sorted(months)[-12:]
+            {"year": y, "month": m, "count": months[(y, m)]}
+            for (y, m) in sorted(months)[-12:]
         ],
         "top_exams": [
             {
@@ -448,7 +521,9 @@ def assessment_admin_stats_internal(db: Session = Depends(get_db)):
 async def assessment_stats_internal(db: Session = Depends(get_db)):
     """Service-to-service only (blocked at the gateway): counts for the public homepage."""
     return {
-        "published_exams": db.query(Assessment).filter(Assessment.is_published.is_(True)).count(),
+        "published_exams": db.query(Assessment)
+        .filter(Assessment.is_published.is_(True))
+        .count(),
         "graded_attempts": db.query(Submission)
         .filter(Submission.status == SubmissionStatus.graded)
         .count(),
@@ -489,18 +564,22 @@ async def _exam_board(assessment_id: int, db: Session) -> list[dict]:
     for student_id, sub in first.items():
         profile = (profiles or {}).get(student_id)
         # Staff test attempts stay off the board; if user_service is down, show everyone unnamed.
-        if profiles is not None and (not profile or str(profile.get("role", "")).lower() != "student"):
+        if profiles is not None and (
+            not profile or str(profile.get("role", "")).lower() != "student"
+        ):
             continue
         profile = profile or {}
-        rows.append({
-            "student_id": student_id,
-            "score": float(sub.score or 0),
-            "time_seconds": _time_taken(sub),
-            "full_name": profile.get("full_name") or "Student",
-            "school": profile.get("school") or "",
-            "district": profile.get("district") or "",
-            "grade": profile.get("grade") or 0,
-        })
+        rows.append(
+            {
+                "student_id": student_id,
+                "score": float(sub.score or 0),
+                "time_seconds": _time_taken(sub),
+                "full_name": profile.get("full_name") or "Student",
+                "school": profile.get("school") or "",
+                "district": profile.get("district") or "",
+                "grade": profile.get("grade") or 0,
+            }
+        )
     return rank_rows(rows)
 
 
@@ -510,12 +589,16 @@ async def ranking_exams(
     db: Session = Depends(get_db),
 ):
     """Published exams with at least one graded attempt; a signed-in student sees only exams they sat."""
-    attempted = select(Submission.assessment_id).where(Submission.status == SubmissionStatus.graded)
+    attempted = select(Submission.assessment_id).where(
+        Submission.status == SubmissionStatus.graded
+    )
     if payload and str(payload.get("role", "")).lower() == "student":
         attempted = attempted.where(Submission.student_id == int(payload["sub"]))
     exams = (
         db.query(Assessment)
-        .filter(Assessment.is_published.is_(True), Assessment.id.in_(attempted.distinct()))
+        .filter(
+            Assessment.is_published.is_(True), Assessment.id.in_(attempted.distinct())
+        )
         .all()
     )
     titles = await get_course_titles([e.course_id for e in exams])
@@ -573,8 +656,12 @@ async def my_exam_rank(
     """The caller's island and district rank on one exam (null until they've sat it)."""
     assessment = _get_published_or_404(exam_id, db)
     me = int(payload["sub"])
-    mine = next((r for r in await _exam_board(exam_id, db) if r["student_id"] == me), None)
-    title = (await get_course_titles([assessment.course_id])).get(assessment.course_id, "")
+    mine = next(
+        (r for r in await _exam_board(exam_id, db) if r["student_id"] == me), None
+    )
+    title = (await get_course_titles([assessment.course_id])).get(
+        assessment.course_id, ""
+    )
     return {
         "exam_id": str(assessment.id),
         "course_id": str(assessment.course_id),
@@ -646,7 +733,10 @@ async def list_my_submissions(
     student_id = int(payload["sub"])
     submissions = (
         db.query(Submission)
-        .filter(Submission.student_id == student_id, Submission.status == SubmissionStatus.graded)
+        .filter(
+            Submission.student_id == student_id,
+            Submission.status == SubmissionStatus.graded,
+        )
         .order_by(Submission.submitted_at.desc(), Submission.id.desc())
         .limit(limit)
         .all()
@@ -656,10 +746,13 @@ async def list_my_submissions(
 
     assessment_ids = {sub.assessment_id for sub in submissions}
     assessments = {
-        a.id: a for a in db.query(Assessment).filter(Assessment.id.in_(assessment_ids)).all()
+        a.id: a
+        for a in db.query(Assessment).filter(Assessment.id.in_(assessment_ids)).all()
     }
     questions_by_assessment: dict[int, list[Question]] = {}
-    for q in db.query(Question).filter(Question.assessment_id.in_(assessment_ids)).all():
+    for q in (
+        db.query(Question).filter(Question.assessment_id.in_(assessment_ids)).all()
+    ):
         questions_by_assessment.setdefault(q.assessment_id, []).append(q)
     course_titles = await get_course_titles([a.course_id for a in assessments.values()])
 
@@ -719,13 +812,17 @@ async def review_submission(
     """Full Q&A review of one graded attempt, for its student, an admin, or the course teacher."""
     submission = (
         db.query(Submission)
-        .filter(Submission.id == submission_id, Submission.status == SubmissionStatus.graded)
+        .filter(
+            Submission.id == submission_id, Submission.status == SubmissionStatus.graded
+        )
         .first()
     )
     not_found = HTTPException(status_code=404, detail={"error": "ATTEMPT_NOT_FOUND"})
     if not submission:
         raise not_found
-    assessment = db.query(Assessment).filter(Assessment.id == submission.assessment_id).first()
+    assessment = (
+        db.query(Assessment).filter(Assessment.id == submission.assessment_id).first()
+    )
     if not assessment:
         raise not_found
 
@@ -745,7 +842,9 @@ async def review_submission(
     answers = _answers_of(submission)
     score = float(submission.score or 0)
     course_titles = await get_course_titles([assessment.course_id])
-    overall_rank, district_rank = await _my_ranks(assessment.id, submission.student_id, db)
+    overall_rank, district_rank = await _my_ranks(
+        assessment.id, submission.student_id, db
+    )
     return AttemptReviewResponse(
         attempt_id=submission.id,
         student_id=submission.student_id,
@@ -776,7 +875,9 @@ async def list_my_attempts(
 ):
     """The caller's own graded attempts, summarised per assessment of one course."""
     pass_scores = dict(
-        db.query(Assessment.id, Assessment.pass_score).filter(Assessment.course_id == course_id).all()
+        db.query(Assessment.id, Assessment.pass_score)
+        .filter(Assessment.course_id == course_id)
+        .all()
     )
     if not pass_scores:
         return []
@@ -797,7 +898,10 @@ async def list_my_attempts(
         existing = summary.get(sub.assessment_id)
         if existing is None:
             summary[sub.assessment_id] = MyAttemptSummary(
-                assessment_id=sub.assessment_id, attempt_count=1, last_score=score, passed=passed
+                assessment_id=sub.assessment_id,
+                attempt_count=1,
+                last_score=score,
+                passed=passed,
             )
         else:
             existing.attempt_count += 1
@@ -805,7 +909,9 @@ async def list_my_attempts(
     return list(summary.values())
 
 
-@router.post("/", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_assessment(
     body: AssessmentCreate,
     payload: dict = Depends(require_role(_TEACHER_ADMIN)),
@@ -845,7 +951,9 @@ async def delete_module_assessments(
     db: Session = Depends(get_db),
 ):
     """Removes every exam (and its questions) inside one lesson — called before the lesson itself is deleted."""
-    await _assert_course_owner(course_id, int(payload["sub"]), payload.get("role", "").lower())
+    await _assert_course_owner(
+        course_id, int(payload["sub"]), payload.get("role", "").lower()
+    )
     ids = [
         row.id
         for row in db.query(Assessment.id).filter(
@@ -853,8 +961,12 @@ async def delete_module_assessments(
         )
     ]
     if ids:
-        db.query(Question).filter(Question.assessment_id.in_(ids)).delete(synchronize_session=False)
-        db.query(Assessment).filter(Assessment.id.in_(ids)).delete(synchronize_session=False)
+        db.query(Question).filter(Question.assessment_id.in_(ids)).delete(
+            synchronize_session=False
+        )
+        db.query(Assessment).filter(Assessment.id.in_(ids)).delete(
+            synchronize_session=False
+        )
         db.commit()
 
 
@@ -919,19 +1031,31 @@ _CSV_COLUMNS = (
 _CSV_TEMPLATE_ROWS = (
     (
         "What is the capital of France?",
-        "London", "Paris", "Berlin", "Madrid", "",
+        "London",
+        "Paris",
+        "Berlin",
+        "Madrid",
+        "",
         "B",
         "Paris is the capital and largest city of France.",
     ),
     (
         "Which planet is known as the Red Planet?",
-        "Venus", "Mars", "Jupiter", "Saturn", "",
+        "Venus",
+        "Mars",
+        "Jupiter",
+        "Saturn",
+        "",
         "B",
         "Mars looks red because of iron oxide on its surface.",
     ),
     (
         "What is the derivative of x^2?",
-        "x", "2x", "x^2", "2", "0",
+        "x",
+        "2x",
+        "x^2",
+        "2",
+        "0",
         "B",
         "By the power rule, d/dx(x^2) = 2x.",
     ),
@@ -1063,7 +1187,10 @@ async def import_questions_csv(
     except UnicodeDecodeError:
         raise HTTPException(
             status_code=422,
-            detail={"error": "INVALID_ENCODING", "message": "CSV must be UTF-8 encoded"},
+            detail={
+                "error": "INVALID_ENCODING",
+                "message": "CSV must be UTF-8 encoded",
+            },
         )
 
     created, errors = import_question_rows(db, assessment_id, text_content)
@@ -1082,10 +1209,16 @@ _MAX_ZIP_SIZE = 100 * 1024 * 1024  # 100 MB
 
 async def _read_zip(file: UploadFile) -> bytes:
     if not (file.filename or "").lower().endswith(".zip"):
-        raise HTTPException(status_code=415, detail={"error": "NOT_A_ZIP", "message": "Please upload a .zip file"})
+        raise HTTPException(
+            status_code=415,
+            detail={"error": "NOT_A_ZIP", "message": "Please upload a .zip file"},
+        )
     data = await file.read()
     if len(data) > _MAX_ZIP_SIZE:
-        raise HTTPException(status_code=413, detail={"error": "FILE_TOO_LARGE", "message": "ZIP must be 100 MB or less"})
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "FILE_TOO_LARGE", "message": "ZIP must be 100 MB or less"},
+        )
     return data
 
 
@@ -1098,19 +1231,26 @@ async def upload_question_images_zip(
 ):
     """Attach images named {question_number}-{n}.png (n = 0 question, 1-5 options A-E)."""
     assessment = _get_assessment_or_404(assessment_id, db)
-    await _assert_course_owner(assessment.course_id, int(payload["sub"]), payload.get("role", "").lower())
+    await _assert_course_owner(
+        assessment.course_id, int(payload["sub"]), payload.get("role", "").lower()
+    )
     try:
         zf = safe_zip(await _read_zip(file))
     except ValueError as e:
-        raise HTTPException(status_code=422, detail={"error": "INVALID_ZIP", "message": str(e)})
-    images = [(info.filename, zf.read(info)) for info in zf.infolist() if not info.is_dir()]
+        raise HTTPException(
+            status_code=422, detail={"error": "INVALID_ZIP", "message": str(e)}
+        )
+    images = [
+        (info.filename, zf.read(info)) for info in zf.infolist() if not info.is_dir()
+    ]
     applied, skipped, errors = await apply_question_images(db, assessment_id, images)
     db.commit()
     return {
         "applied": applied,
         "skipped": skipped,
         "errors": errors,
-        "message": f"Applied {applied} image(s)" + (f", skipped {skipped} file(s) with other names" if skipped else ""),
+        "message": f"Applied {applied} image(s)"
+        + (f", skipped {skipped} file(s) with other names" if skipped else ""),
     }
 
 
@@ -1119,7 +1259,9 @@ async def bulk_import_template(_: dict = Depends(require_role(_TEACHER_ADMIN))):
     return Response(
         content=template_zip(),
         media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="bulk_exam_template.zip"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="bulk_exam_template.zip"'
+        },
     )
 
 
@@ -1132,13 +1274,17 @@ async def bulk_import_exams(
     db: Session = Depends(get_db),
 ):
     """Create several exams (with questions, images and thumbnails) from one ZIP bundle."""
-    await _assert_course_owner(course_id, int(payload["sub"]), payload.get("role", "").lower())
+    await _assert_course_owner(
+        course_id, int(payload["sub"]), payload.get("role", "").lower()
+    )
     data = await _read_zip(file)
     try:
         return await bulk_import(db, course_id, module_id, data)
     except ValueError as e:
         db.rollback()
-        raise HTTPException(status_code=422, detail={"error": "INVALID_BUNDLE", "message": str(e)})
+        raise HTTPException(
+            status_code=422, detail={"error": "INVALID_BUNDLE", "message": str(e)}
+        )
 
 
 @router.put("/questions/{question_id}", response_model=QuestionAdminResponse)
@@ -1157,9 +1303,13 @@ async def update_question(
     updates = body.model_dump(exclude_unset=True)
     if "options" in updates:
         options = updates.pop("options") or []
-        question.options_json = json.dumps([o["option_text"] for o in options]) if options else None
+        question.options_json = (
+            json.dumps([o["option_text"] for o in options]) if options else None
+        )
         question.option_images_json = _option_images_json(body.options or [])
-        correct_from_options = next((o["option_text"] for o in options if o["is_correct"]), None)
+        correct_from_options = next(
+            (o["option_text"] for o in options if o["is_correct"]), None
+        )
         if correct_from_options and "correct_answer" not in updates:
             question.correct_answer = correct_from_options
     if "question_type" in updates:
@@ -1232,12 +1382,20 @@ async def start_assessment_session(
         if not assessment.is_published:
             raise HTTPException(
                 status_code=404,
-                detail={"error": "ASSESSMENT_NOT_FOUND", "message": "Assessment not found"},
+                detail={
+                    "error": "ASSESSMENT_NOT_FOUND",
+                    "message": "Assessment not found",
+                },
             )
-        if not await is_enrolled(student_id, assessment.course_id, assessment.module_id):
+        if not await is_enrolled(
+            student_id, assessment.course_id, assessment.module_id
+        ):
             raise HTTPException(
                 status_code=403,
-                detail={"error": "NOT_ENROLLED", "message": "Enroll in this course to take this exam"},
+                detail={
+                    "error": "NOT_ENROLLED",
+                    "message": "Enroll in this course to take this exam",
+                },
             )
         starts_at = _as_utc(assessment.scheduled_start)
         if starts_at and datetime.now(timezone.utc) < starts_at:
@@ -1346,7 +1504,7 @@ async def start_assessment_session(
 @router.post(
     "/api/assessments/{assessment_id}/submit", response_model=SubmitAssessmentResponse
 )
-async def submit_assessment(
+async def submit_assessment(  # noqa: C901 - grading, session cleanup, badges and the response in one request
     assessment_id: int,
     body: SubmitAssessmentRequest,
     db: Session = Depends(get_db),
@@ -1449,7 +1607,9 @@ async def submit_assessment(
 
     time_taken = 0
     if submission.started_at and submission.submitted_at:
-        time_taken = int((submission.submitted_at - submission.started_at).total_seconds())
+        time_taken = int(
+            (submission.submitted_at - submission.started_at).total_seconds()
+        )
 
     overall_rank, district_rank = await _my_ranks(assessment_id, student_id, db)
 
@@ -1522,12 +1682,15 @@ async def get_my_last_attempt(
         1
         for q in questions
         if q.question_type in (QuestionType.mcq, QuestionType.true_false)
-        and answers_dict.get(q.id, "").strip().lower() == str(q.correct_answer).strip().lower()
+        and answers_dict.get(q.id, "").strip().lower()
+        == str(q.correct_answer).strip().lower()
     )
 
     time_taken = 0
     if submission.started_at and submission.submitted_at:
-        time_taken = int((submission.submitted_at - submission.started_at).total_seconds())
+        time_taken = int(
+            (submission.submitted_at - submission.started_at).total_seconds()
+        )
 
     overall_rank, district_rank = await _my_ranks(assessment_id, student_id, db)
 

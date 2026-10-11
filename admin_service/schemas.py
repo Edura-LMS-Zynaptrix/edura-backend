@@ -76,4 +76,3 @@ class ChatConversationResponse(BaseModel):
     last_message: Optional[str] = None
     unread_count: int = 0
     student_name: str = "Guest"
-

@@ -27,7 +27,8 @@ def upgrade() -> None:
         "assessments", sa.Column("image_url", sa.String(length=512), nullable=True)
     )
     op.add_column(
-        "assessments", sa.Column("image_public_id", sa.String(length=255), nullable=True)
+        "assessments",
+        sa.Column("image_public_id", sa.String(length=255), nullable=True),
     )
     op.add_column(
         "assessments",
@@ -41,13 +42,16 @@ def upgrade() -> None:
 
     op.add_column("questions", sa.Column("explanation", sa.Text(), nullable=True))
     op.add_column(
-        "questions", sa.Column("question_image_url", sa.String(length=512), nullable=True)
+        "questions",
+        sa.Column("question_image_url", sa.String(length=512), nullable=True),
     )
     op.add_column(
         "questions",
         sa.Column("question_image_public_id", sa.String(length=255), nullable=True),
     )
-    op.add_column("questions", sa.Column("option_images_json", sa.Text(), nullable=True))
+    op.add_column(
+        "questions", sa.Column("option_images_json", sa.Text(), nullable=True)
+    )
 
 
 def downgrade() -> None:

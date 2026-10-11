@@ -34,15 +34,27 @@ def start_referral_consumer() -> None:
     while True:
         try:
             connection = pika.BlockingConnection(
-                pika.ConnectionParameters(host=RABBITMQ_HOST, connection_attempts=10, retry_delay=3)
+                pika.ConnectionParameters(
+                    host=RABBITMQ_HOST, connection_attempts=10, retry_delay=3
+                )
             )
             channel = connection.channel()
-            channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="topic", durable=True)
+            channel.exchange_declare(
+                exchange=EXCHANGE_NAME, exchange_type="topic", durable=True
+            )
             channel.queue_declare(queue=QUEUE_NAME, durable=True)
-            channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key="enrollment.activated")
+            channel.queue_bind(
+                exchange=EXCHANGE_NAME,
+                queue=QUEUE_NAME,
+                routing_key="enrollment.activated",
+            )
             channel.basic_consume(queue=QUEUE_NAME, on_message_callback=_handle)
             logger.info("Referral consumer listening on %s", QUEUE_NAME)
             channel.start_consuming()
         except Exception as e:
-            logger.warning("Referral consumer lost RabbitMQ (%s): %s; retrying in 5s", RABBITMQ_HOST, e)
+            logger.warning(
+                "Referral consumer lost RabbitMQ (%s): %s; retrying in 5s",
+                RABBITMQ_HOST,
+                e,
+            )
             time.sleep(5)

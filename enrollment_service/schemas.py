@@ -90,4 +90,3 @@ class ClassEnrollmentGrant(BaseModel):
     user_id: int
     class_package_id: int
     expires_at: datetime | None = None
-

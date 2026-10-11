@@ -17,25 +17,30 @@ def _avg(values: list) -> int:
     return round(sum(values) / len(values)) if values else 0
 
 
-def build_student_progress(profile: dict, exams: list[dict], titles: dict[int, str], badges: int) -> dict:
+def build_student_progress(
+    profile: dict, exams: list[dict], titles: dict[int, str], badges: int
+) -> dict:
     """Subject-wise progress over every exam the student can take. Courses stand in for subjects."""
     subjects: dict[int, dict] = {}
     for exam in exams:
         course_id = exam["course_id"]
         title = titles.get(course_id, "General")
-        s = subjects.setdefault(course_id, {
-            "subject": title,
-            "course_title": title,
-            "total_exams": 0,
-            "attempted_exams": 0,
-            "total_attempts_count": 0,
-            "best_score_pct": 0,
-            "avg_score_pct": 0,
-            "avg_time_seconds": 0,
-            "exams": [],
-            "all_scores": [],
-            "all_times": [],
-        })
+        s = subjects.setdefault(
+            course_id,
+            {
+                "subject": title,
+                "course_title": title,
+                "total_exams": 0,
+                "attempted_exams": 0,
+                "total_attempts_count": 0,
+                "best_score_pct": 0,
+                "avg_score_pct": 0,
+                "avg_time_seconds": 0,
+                "exams": [],
+                "all_scores": [],
+                "all_times": [],
+            },
+        )
         s["total_exams"] += 1
 
         history = []
@@ -44,30 +49,34 @@ def build_student_progress(profile: dict, exams: list[dict], titles: dict[int, s
             s["all_scores"].append(score)
             if attempt.get("time_seconds"):
                 s["all_times"].append(attempt["time_seconds"])
-            history.append({
-                "id": str(attempt["id"]),
-                "attempt_number": number,
-                "score_pct": score,
-                "marks_obtained": attempt["marks_obtained"],
-                "total_questions": attempt["total_questions"],
-                "time_seconds": attempt.get("time_seconds"),
-                "submitted_at": attempt.get("submitted_at"),
-                "status": "passed" if score >= PASS_MARK_PCT else "failed",
-            })
+            history.append(
+                {
+                    "id": str(attempt["id"]),
+                    "attempt_number": number,
+                    "score_pct": score,
+                    "marks_obtained": attempt["marks_obtained"],
+                    "total_questions": attempt["total_questions"],
+                    "time_seconds": attempt.get("time_seconds"),
+                    "submitted_at": attempt.get("submitted_at"),
+                    "status": "passed" if score >= PASS_MARK_PCT else "failed",
+                }
+            )
         if history:
             s["attempted_exams"] += 1
             s["total_attempts_count"] += len(history)
         best = max((h["score_pct"] for h in history), default=0)
         s["best_score_pct"] = max(s["best_score_pct"], best)
-        s["exams"].append({
-            "id": str(exam["id"]),
-            "title": exam["title"],
-            "order_number": exam.get("order_number") or 0,
-            "best_score_pct": best,
-            "attempts_count": len(history),
-            "latest_score_pct": history[-1]["score_pct"] if history else 0,
-            "history": history[::-1],  # newest first
-        })
+        s["exams"].append(
+            {
+                "id": str(exam["id"]),
+                "title": exam["title"],
+                "order_number": exam.get("order_number") or 0,
+                "best_score_pct": best,
+                "attempts_count": len(history),
+                "latest_score_pct": history[-1]["score_pct"] if history else 0,
+                "history": history[::-1],  # newest first
+            }
+        )
 
     all_scores, all_times = [], []
     total_unique = attempted_unique = total_attempts = 0
@@ -100,7 +109,9 @@ def build_student_progress(profile: dict, exams: list[dict], titles: dict[int, s
             "total_unique_exams": total_unique,
             "unique_exams_attempted": attempted_unique,
             "total_attempts_made": total_attempts,
-            "completion_pct": round(attempted_unique / total_unique * 100) if total_unique else 0,
+            "completion_pct": (
+                round(attempted_unique / total_unique * 100) if total_unique else 0
+            ),
             "avg_score_pct": _avg(all_scores),
             "avg_time_seconds": _avg(all_times),
         },
@@ -110,11 +121,15 @@ def build_student_progress(profile: dict, exams: list[dict], titles: dict[int, s
 
 async def _exams_for(user_id: int) -> list[dict]:
     access = await clients.accessible(user_id)
-    return await clients.exam_progress(user_id, access["course_ids"], access["lesson_ids"])
+    return await clients.exam_progress(
+        user_id, access["course_ids"], access["lesson_ids"]
+    )
 
 
 async def _progress_for(user_id: int, profile: dict) -> dict:
-    exams, badges = await asyncio.gather(_exams_for(user_id), clients.badge_count(user_id))
+    exams, badges = await asyncio.gather(
+        _exams_for(user_id), clients.badge_count(user_id)
+    )
     titles = await clients.course_titles({e["course_id"] for e in exams})
     return build_student_progress(profile, exams, titles, badges)
 
@@ -151,7 +166,9 @@ def _rate(part: int, whole: int) -> float:
     return round(part / whole * 100, 1) if whole else 0.0
 
 
-def _performance(item_id, title: str, kind: str, scores: list[float], failures: int, students: set) -> dict:
+def _performance(
+    item_id, title: str, kind: str, scores: list[float], failures: int, students: set
+) -> dict:
     return {
         "id": str(item_id),
         "title": title,
@@ -166,7 +183,13 @@ def _performance(item_id, title: str, kind: str, scores: list[float], failures: 
 def build_course_struggle(course_id: int, modules: list[dict], data: dict) -> dict:
     """Where students struggle in a course, judged on FIRST attempts only (retakes would hide it)."""
     stats = {
-        e["id"]: {"title": e["title"], "module_id": e.get("module_id"), "scores": [], "failures": 0, "students": set()}
+        e["id"]: {
+            "title": e["title"],
+            "module_id": e.get("module_id"),
+            "scores": [],
+            "failures": 0,
+            "students": set(),
+        }
         for e in data["exams"]
     }
     scores_all = []
@@ -192,20 +215,28 @@ def build_course_struggle(course_id: int, modules: list[dict], data: dict) -> di
         in_lesson = [s for s in stats.values() if s["module_id"] == module["id"]]
         scores = [x for s in in_lesson for x in s["scores"]]
         if scores:
-            lessons.append(_performance(
-                module["id"],
-                module["title"],
-                "lesson",
-                scores,
-                sum(s["failures"] for s in in_lesson),
-                set().union(*(s["students"] for s in in_lesson)),
-            ))
+            lessons.append(
+                _performance(
+                    module["id"],
+                    module["title"],
+                    "lesson",
+                    scores,
+                    sum(s["failures"] for s in in_lesson),
+                    set().union(*(s["students"] for s in in_lesson)),
+                )
+            )
 
-    hardest_first = lambda item: (-item["failure_rate"], item["avg_score"])  # noqa: E731
+    def hardest_first(item: dict) -> tuple:
+        return (-item["failure_rate"], item["avg_score"])
+
     return {
         "course_id": str(course_id),
-        "overall_avg_score": round(sum(scores_all) / len(scores_all), 1) if scores_all else 0.0,
-        "overall_failure_rate": _rate(sum(1 for s in scores_all if s < FAIL_MARK_PCT), len(scores_all)),
+        "overall_avg_score": (
+            round(sum(scores_all) / len(scores_all), 1) if scores_all else 0.0
+        ),
+        "overall_failure_rate": _rate(
+            sum(1 for s in scores_all if s < FAIL_MARK_PCT), len(scores_all)
+        ),
         "struggling_modules": sorted(lessons, key=hardest_first),
         "hardest_exams": sorted(exams, key=hardest_first),
     }
@@ -216,4 +247,6 @@ async def course_struggle(course_id: int) -> dict | None:
     modules = await clients.course_modules(course_id)
     if modules is None:
         return None
-    return build_course_struggle(course_id, modules, await clients.first_attempts(course_id))
+    return build_course_struggle(
+        course_id, modules, await clients.first_attempts(course_id)
+    )

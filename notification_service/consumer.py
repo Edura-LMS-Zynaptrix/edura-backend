@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 
 import pika
 from database import Base, SessionLocal, engine
-from sqlalchemy import text
 from email_service import render_email, send_email
 from models import (
     NotificationChannel,
@@ -15,6 +14,7 @@ from models import (
     NotificationLog,
     NotificationStatus,
 )
+from sqlalchemy import text
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -26,7 +26,9 @@ EXCHANGE_NAME = "edura.events"
 QUEUE_NAME = "notification.queue"
 
 
-def process_message(ch, method, properties, body):
+def process_message(  # noqa: C901 - one branch per event type
+    ch, method, properties, body
+):
     routing_key = method.routing_key
     logger.info(f"Received event with routing key: {routing_key}")
     db = SessionLocal()
@@ -75,12 +77,17 @@ def process_message(ch, method, properties, body):
             subject = f"Your Edura Progress Report - {month}".rstrip(" -")
             template_name = "progress_report.html"
             event_type = NotificationEvent.progress_report
-            context = {"student_name": data.get("student_name", "Student"), "month": month}
-            attachments = [{
-                "filename": data.get("filename", "Progress_Report.pdf"),
-                "data": base64.b64decode(data["pdf_base64"]),
-                "subtype": "pdf",
-            }]
+            context = {
+                "student_name": data.get("student_name", "Student"),
+                "month": month,
+            }
+            attachments = [
+                {
+                    "filename": data.get("filename", "Progress_Report.pdf"),
+                    "data": base64.b64decode(data["pdf_base64"]),
+                    "subtype": "pdf",
+                }
+            ]
         elif routing_key == "payment.success":
             subject = "Payment Confirmation - Edura"
             template_name = "payment_confirm.html"
@@ -121,7 +128,12 @@ def process_message(ch, method, properties, body):
 
         # Send Email via SMTP
         try:
-            send_email(to_email=email, subject=subject, html_body=html_body, attachments=attachments)
+            send_email(
+                to_email=email,
+                subject=subject,
+                html_body=html_body,
+                attachments=attachments,
+            )
 
             log_entry = NotificationLog(
                 recipient_id=recipient_id,

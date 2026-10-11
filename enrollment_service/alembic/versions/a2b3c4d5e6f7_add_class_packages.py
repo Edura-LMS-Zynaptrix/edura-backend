@@ -27,7 +27,12 @@ def upgrade() -> None:
         sa.Column("stream_id", sa.Integer(), nullable=True),
         sa.Column("price", sa.Numeric(10, 2), nullable=False, server_default="0"),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_class_packages_grade", "class_packages", ["grade"])
@@ -38,17 +43,32 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("class_package_id", sa.Integer(), nullable=False),
         sa.Column("payment_id", sa.Integer(), nullable=True),
-        sa.Column("status", sa.String(length=20), nullable=False, server_default="active"),
-        sa.Column("enrolled_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "status", sa.String(length=20), nullable=False, server_default="active"
+        ),
+        sa.Column(
+            "enrolled_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
-        sa.UniqueConstraint("user_id", "class_package_id", name="uq_class_enrollment_user_package"),
+        sa.UniqueConstraint(
+            "user_id", "class_package_id", name="uq_class_enrollment_user_package"
+        ),
     )
     op.create_index("ix_class_enrollments_user_id", "class_enrollments", ["user_id"])
-    op.create_index("ix_class_enrollments_class_package_id", "class_enrollments", ["class_package_id"])
+    op.create_index(
+        "ix_class_enrollments_class_package_id",
+        "class_enrollments",
+        ["class_package_id"],
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_class_enrollments_class_package_id", table_name="class_enrollments")
+    op.drop_index(
+        "ix_class_enrollments_class_package_id", table_name="class_enrollments"
+    )
     op.drop_index("ix_class_enrollments_user_id", table_name="class_enrollments")
     op.drop_table("class_enrollments")
     op.drop_index("ix_class_packages_stream_id", table_name="class_packages")

@@ -22,11 +22,17 @@ def find_referrer(db: Session, code: str | None) -> UserProfile | None:
     return db.query(UserProfile).filter(UserProfile.referral_code == code).first()
 
 
-def bind_referral(db: Session, profile: UserProfile, referrer: UserProfile) -> ReferralEvent | None:
+def bind_referral(
+    db: Session, profile: UserProfile, referrer: UserProfile
+) -> ReferralEvent | None:
     """Link profile to its referrer once and open a pending event. Caller commits."""
     if referrer.user_id == profile.user_id or profile.referred_by_user_id is not None:
         return None
-    if db.query(ReferralEvent).filter(ReferralEvent.referred_user_id == profile.user_id).first():
+    if (
+        db.query(ReferralEvent)
+        .filter(ReferralEvent.referred_user_id == profile.user_id)
+        .first()
+    ):
         return None
     profile.referred_by_user_id = referrer.user_id
     event = ReferralEvent(
@@ -44,18 +50,42 @@ def bind_referral(db: Session, profile: UserProfile, referrer: UserProfile) -> R
 def apply_code(db: Session, profile: UserProfile, code: str) -> dict:
     """Explicit 'apply a referral code' action, with the reference platform's error cases."""
     if profile.role.value != "student":
-        raise HTTPException(status_code=403, detail={"error": "STUDENTS_ONLY", "message": "Only students can apply referral codes"})
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "STUDENTS_ONLY",
+                "message": "Only students can apply referral codes",
+            },
+        )
     if not (code or "").strip():
-        raise HTTPException(status_code=400, detail={"error": "CODE_REQUIRED", "message": "Referral code is required"})
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "CODE_REQUIRED", "message": "Referral code is required"},
+        )
     if profile.referred_by_user_id is not None:
-        raise HTTPException(status_code=400, detail={"error": "ALREADY_REFERRED", "message": "Referral already applied"})
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "ALREADY_REFERRED", "message": "Referral already applied"},
+        )
     referrer = find_referrer(db, code)
     if not referrer:
-        raise HTTPException(status_code=404, detail={"error": "INVALID_CODE", "message": "Invalid referral code"})
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "INVALID_CODE", "message": "Invalid referral code"},
+        )
     if referrer.user_id == profile.user_id:
-        raise HTTPException(status_code=400, detail={"error": "SELF_REFERRAL", "message": "You cannot refer yourself"})
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "SELF_REFERRAL", "message": "You cannot refer yourself"},
+        )
     if not bind_referral(db, profile, referrer):
-        raise HTTPException(status_code=400, detail={"error": "ALREADY_PROCESSED", "message": "Referral already processed"})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ALREADY_PROCESSED",
+                "message": "Referral already processed",
+            },
+        )
     db.commit()
     return {
         "message": "Referral code applied. Credit will be awarded when you enroll in a course.",
@@ -67,14 +97,20 @@ def credit_on_enrollment(db: Session, referred_user_id: int) -> bool:
     """Credit the referrer for this student's first enrollment; idempotent."""
     event = (
         db.query(ReferralEvent)
-        .filter(ReferralEvent.referred_user_id == referred_user_id, ReferralEvent.status == "pending")
+        .filter(
+            ReferralEvent.referred_user_id == referred_user_id,
+            ReferralEvent.status == "pending",
+        )
         .with_for_update()
         .first()
     )
     if not event:
         return False
     referrer = (
-        db.query(UserProfile).filter(UserProfile.user_id == event.referrer_user_id).with_for_update().first()
+        db.query(UserProfile)
+        .filter(UserProfile.user_id == event.referrer_user_id)
+        .with_for_update()
+        .first()
     )
     if not referrer:
         return False

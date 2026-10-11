@@ -122,7 +122,9 @@ class Question(Base):
     # Shown to the student in the post-submission review.
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     question_image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    question_image_public_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    question_image_public_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
     # JSON list aligned index-for-index with options_json: {"url", "public_id"} or null.
     option_images_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     marks: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -225,7 +227,9 @@ class Badge(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     criteria_key: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
-    category: Mapped[str] = mapped_column(String(20), nullable=False)  # activity | performance | milestone
+    category: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # activity | performance | milestone
     icon_name: Mapped[str] = mapped_column(String(50), nullable=False)  # lucide icon
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -248,4 +252,3 @@ class UserBadge(Base):
         Index("ix_user_badges_student_id", "student_id"),
         Index("uq_user_badges_student_badge", "student_id", "badge_id", unique=True),
     )
-

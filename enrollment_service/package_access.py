@@ -5,14 +5,22 @@ class package that covers the course (the reference platform's rules).
 
 from datetime import datetime, timedelta, timezone
 
-from models import ClassEnrollment, ClassPackage, Enrollment, EnrollmentStatus, LessonAccess
+from models import (
+    ClassEnrollment,
+    ClassPackage,
+    Enrollment,
+    EnrollmentStatus,
+    LessonAccess,
+)
 from service_clients import course_info
 from sqlalchemy.orm import Session
 
 PACKAGE_DURATION = timedelta(days=365)
 
 
-def package_covers(package_grade: int, package_stream_id: int | None, course: dict) -> bool:
+def package_covers(
+    package_grade: int, package_stream_id: int | None, course: dict
+) -> bool:
     """grade 5-10 -> same grade; 11 -> 10 & 11; 12 -> 12 in stream; 13 -> 12 & 13 in stream."""
     course_grade = course.get("grade")
     if course_grade is None:
@@ -49,7 +57,11 @@ def active_packages(db: Session, user_id: int) -> list[ClassPackage]:
         )
         .all()
     )
-    return [pkg for enr, pkg in rows if enr.expires_at is None or _aware(enr.expires_at) > now]
+    return [
+        pkg
+        for enr, pkg in rows
+        if enr.expires_at is None or _aware(enr.expires_at) > now
+    ]
 
 
 def direct_course_access(db: Session, student_id: int, course_id: int) -> bool:
@@ -74,38 +86,57 @@ def lesson_grants(db: Session, student_id: int, course_id: int) -> list[int]:
     ]
 
 
-async def course_access(db: Session, student_id: int, course_id: int) -> tuple[bool, str | None]:
+async def course_access(
+    db: Session, student_id: int, course_id: int
+) -> tuple[bool, str | None]:
     """(whole course unlocked?, how) — how is 'course' or 'class'."""
     if direct_course_access(db, student_id, course_id):
         return True, "course"
     packages = active_packages(db, student_id)
     if packages:
         course = await course_info(course_id)
-        if course and any(package_covers(p.grade, p.stream_id, course) for p in packages):
+        if course and any(
+            package_covers(p.grade, p.stream_id, course) for p in packages
+        ):
             return True, "class"
     return False, None
 
 
-async def has_access(db: Session, student_id: int, course_id: int, module_id: int | None) -> bool:
+async def has_access(
+    db: Session, student_id: int, course_id: int, module_id: int | None
+) -> bool:
     whole_course, _ = await course_access(db, student_id, course_id)
     if whole_course:
         return True
-    return module_id is not None and module_id in lesson_grants(db, student_id, course_id)
+    return module_id is not None and module_id in lesson_grants(
+        db, student_id, course_id
+    )
 
 
-def grant_package(db: Session, user_id: int, package_id: int, payment_id: int | None = None,
-                  expires_at: datetime | None = None) -> ClassEnrollment:
+def grant_package(
+    db: Session,
+    user_id: int,
+    package_id: int,
+    payment_id: int | None = None,
+    expires_at: datetime | None = None,
+) -> ClassEnrollment:
     """Create or reactivate a student's package for a year (or until expires_at). Caller commits."""
     until = expires_at or datetime.now(timezone.utc) + PACKAGE_DURATION
     enrollment = (
         db.query(ClassEnrollment)
-        .filter(ClassEnrollment.user_id == user_id, ClassEnrollment.class_package_id == package_id)
+        .filter(
+            ClassEnrollment.user_id == user_id,
+            ClassEnrollment.class_package_id == package_id,
+        )
         .first()
     )
     if enrollment is None:
         enrollment = ClassEnrollment(
-            user_id=user_id, class_package_id=package_id, payment_id=payment_id,
-            status="active", expires_at=until,
+            user_id=user_id,
+            class_package_id=package_id,
+            payment_id=payment_id,
+            status="active",
+            expires_at=until,
         )
         db.add(enrollment)
     else:

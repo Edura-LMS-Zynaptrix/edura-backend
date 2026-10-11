@@ -32,13 +32,23 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _conversation_for(db: Session, user_id: int | None, session_id: str | None) -> ChatConversation | None:
+def _conversation_for(
+    db: Session, user_id: int | None, session_id: str | None
+) -> ChatConversation | None:
     if user_id is not None:
-        conv = db.query(ChatConversation).filter(ChatConversation.user_id == user_id).first()
+        conv = (
+            db.query(ChatConversation)
+            .filter(ChatConversation.user_id == user_id)
+            .first()
+        )
         if conv:
             return conv
     if session_id:
-        conv = db.query(ChatConversation).filter(ChatConversation.session_id == session_id).first()
+        conv = (
+            db.query(ChatConversation)
+            .filter(ChatConversation.session_id == session_id)
+            .first()
+        )
         # A signed-in user may only use a guest thread nobody has claimed yet.
         if conv and (conv.user_id is None or conv.user_id == user_id):
             return conv
@@ -46,13 +56,19 @@ def _conversation_for(db: Session, user_id: int | None, session_id: str | None) 
 
 
 def _get_conversation_or_404(conversation_id: int, db: Session) -> ChatConversation:
-    conv = db.query(ChatConversation).filter(ChatConversation.id == conversation_id).first()
+    conv = (
+        db.query(ChatConversation)
+        .filter(ChatConversation.id == conversation_id)
+        .first()
+    )
     if not conv:
         raise HTTPException(status_code=404, detail={"error": "CONVERSATION_NOT_FOUND"})
     return conv
 
 
-async def _describe(conversations: list[ChatConversation], db: Session) -> list[ChatConversationResponse]:
+async def _describe(
+    conversations: list[ChatConversation], db: Session
+) -> list[ChatConversationResponse]:
     if not conversations:
         return []
     ids = [c.id for c in conversations]
@@ -74,7 +90,9 @@ async def _describe(conversations: list[ChatConversation], db: Session) -> list[
         .all()
     ):
         latest.setdefault(msg.conversation_id, msg.message)
-    names = await display_names([c.user_id for c in conversations if c.user_id is not None])
+    names = await display_names(
+        [c.user_id for c in conversations if c.user_id is not None]
+    )
     return [
         ChatConversationResponse(
             id=c.id,
@@ -85,7 +103,9 @@ async def _describe(conversations: list[ChatConversation], db: Session) -> list[
             created_at=c.created_at,
             last_message=latest.get(c.id),
             unread_count=unread.get(c.id, 0),
-            student_name=names.get(c.user_id, "Student") if c.user_id is not None else "Guest",
+            student_name=(
+                names.get(c.user_id, "Student") if c.user_id is not None else "Guest"
+            ),
         )
         for c in conversations
     ]
@@ -106,14 +126,21 @@ async def send_message(
     if user_id is None and not body.session_id:
         raise HTTPException(
             status_code=400,
-            detail={"error": "IDENTITY_REQUIRED", "message": "Sign in or provide a session_id"},
+            detail={
+                "error": "IDENTITY_REQUIRED",
+                "message": "Sign in or provide a session_id",
+            },
         )
     conv = _conversation_for(db, user_id, body.session_id)
     if conv is None:
-        conv = ChatConversation(user_id=user_id, session_id=None if user_id else body.session_id)
+        conv = ChatConversation(
+            user_id=user_id, session_id=None if user_id else body.session_id
+        )
         db.add(conv)
         db.flush()
-    msg = ChatMessage(conversation_id=conv.id, message=body.message.strip(), sender_id=user_id)
+    msg = ChatMessage(
+        conversation_id=conv.id, message=body.message.strip(), sender_id=user_id
+    )
     db.add(msg)
     conv.last_message_at = _now()
     db.commit()
@@ -148,7 +175,10 @@ async def sync_session(
     user_id = int(payload["sub"])
     guest = (
         db.query(ChatConversation)
-        .filter(ChatConversation.session_id == body.session_id, ChatConversation.user_id.is_(None))
+        .filter(
+            ChatConversation.session_id == body.session_id,
+            ChatConversation.user_id.is_(None),
+        )
         .first()
     )
     if guest is None:
@@ -177,18 +207,26 @@ async def admin_list_conversations(
     _: dict = Depends(require_role(_ADMIN)),
     db: Session = Depends(get_db),
 ):
-    conversations = db.query(ChatConversation).order_by(ChatConversation.last_message_at.desc()).all()
+    conversations = (
+        db.query(ChatConversation)
+        .order_by(ChatConversation.last_message_at.desc())
+        .all()
+    )
     return await _describe(conversations, db)
 
 
-@router.get("/admin/conversations/student/{user_id}", response_model=ChatConversationResponse)
+@router.get(
+    "/admin/conversations/student/{user_id}", response_model=ChatConversationResponse
+)
 async def admin_conversation_for_student(
     user_id: int,
     _: dict = Depends(require_role(_ADMIN)),
     db: Session = Depends(get_db),
 ):
     """Open (or start) the thread with one student, so an admin can message them first."""
-    conv = db.query(ChatConversation).filter(ChatConversation.user_id == user_id).first()
+    conv = (
+        db.query(ChatConversation).filter(ChatConversation.user_id == user_id).first()
+    )
     if conv is None:
         if not await display_names([user_id]):
             raise HTTPException(status_code=404, detail={"error": "USER_NOT_FOUND"})
@@ -199,7 +237,10 @@ async def admin_conversation_for_student(
     return (await _describe([conv], db))[0]
 
 
-@router.get("/admin/conversations/{conversation_id}/messages", response_model=list[ChatMessageResponse])
+@router.get(
+    "/admin/conversations/{conversation_id}/messages",
+    response_model=list[ChatMessageResponse],
+)
 async def admin_conversation_messages(
     conversation_id: int,
     _: dict = Depends(require_role(_ADMIN)),
@@ -218,7 +259,9 @@ async def admin_conversation_messages(
     )
 
 
-@router.post("/admin/conversations/{conversation_id}/reply", response_model=ChatMessageResponse)
+@router.post(
+    "/admin/conversations/{conversation_id}/reply", response_model=ChatMessageResponse
+)
 async def admin_reply(
     conversation_id: int,
     body: AdminChatReply,
@@ -239,7 +282,9 @@ async def admin_reply(
     return msg
 
 
-@router.delete("/admin/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/admin/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT
+)
 async def admin_delete_conversation(
     conversation_id: int,
     _: dict = Depends(require_role(_ADMIN)),

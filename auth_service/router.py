@@ -1,5 +1,7 @@
 import bcrypt
+from config import settings
 from database import SessionLocal
+from events import publish_event
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from models import User, UserRole
 from schemas import (
@@ -20,8 +22,6 @@ from schemas import (
     UserResponse,
     UserStatusUpdateRequest,
 )
-from config import settings
-from events import publish_event
 from services import (
     GoogleAuthService,
     OtpService,
@@ -124,7 +124,9 @@ async def create_admin(
             detail={"error": "EMAIL_EXISTS", "message": "Email already registered"},
         )
 
-    hashed = bcrypt.hashpw(req.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    hashed = bcrypt.hashpw(req.password.encode("utf-8"), bcrypt.gensalt()).decode(
+        "utf-8"
+    )
     user = User(
         email=req.email,
         hashed_password=hashed,
@@ -289,7 +291,9 @@ def refresh(
 
 
 @router.post("/google", response_model=TokenResponse)
-async def google_login(req: GoogleLoginRequest, response: Response, db: Session = Depends(get_db)):
+async def google_login(
+    req: GoogleLoginRequest, response: Response, db: Session = Depends(get_db)
+):
     """
     Sign in (or sign up) with Google. Unifies with an existing email+password
     account: looked up by google_id first, then by email — if a password
@@ -300,7 +304,10 @@ async def google_login(req: GoogleLoginRequest, response: Response, db: Session 
     if not google_info:
         raise HTTPException(
             status_code=401,
-            detail={"error": "INVALID_GOOGLE_TOKEN", "message": "Invalid or expired Google token"},
+            detail={
+                "error": "INVALID_GOOGLE_TOKEN",
+                "message": "Invalid or expired Google token",
+            },
         )
 
     google_id = google_info["google_id"]
@@ -331,7 +338,9 @@ async def google_login(req: GoogleLoginRequest, response: Response, db: Session 
         db.refresh(user)
         # Seed the profile from Google, as the reference platform does, so
         # complete-profile only has to collect the academic details.
-        first_name, _, last_name = (google_info.get("full_name") or "").strip().partition(" ")
+        first_name, _, last_name = (
+            (google_info.get("full_name") or "").strip().partition(" ")
+        )
         await create_profile_internal(
             user.id,
             "student",
@@ -399,14 +408,19 @@ def set_password(
     if user.hashed_password:
         raise HTTPException(
             status_code=400,
-            detail={"error": "PASSWORD_ALREADY_SET", "message": "A password is already set. Use change-password instead."},
+            detail={
+                "error": "PASSWORD_ALREADY_SET",
+                "message": "A password is already set. Use change-password instead.",
+            },
         )
 
     user.hashed_password = bcrypt.hashpw(
         req.new_password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
     db.commit()
-    return {"message": "Password set successfully. You can now log in with email and password."}
+    return {
+        "message": "Password set successfully. You can now log in with email and password."
+    }
 
 
 @router.post("/change-password")
@@ -421,14 +435,20 @@ def change_password(
     if not user.hashed_password:
         raise HTTPException(
             status_code=400,
-            detail={"error": "NO_PASSWORD_SET", "message": "No password set yet. Use set-password instead."},
+            detail={
+                "error": "NO_PASSWORD_SET",
+                "message": "No password set yet. Use set-password instead.",
+            },
         )
     if not bcrypt.checkpw(
         req.current_password.encode("utf-8"), user.hashed_password.encode("utf-8")
     ):
         raise HTTPException(
             status_code=400,
-            detail={"error": "INVALID_CREDENTIALS", "message": "Current password is incorrect"},
+            detail={
+                "error": "INVALID_CREDENTIALS",
+                "message": "Current password is incorrect",
+            },
         )
 
     user.hashed_password = bcrypt.hashpw(
@@ -476,7 +496,11 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     user_id, fingerprint = parsed
     user = db.query(User).filter(User.id == user_id).first()
     # The fingerprint changes with the password, so a used link can't be replayed.
-    if not user or not user.is_active or not PasswordResetService.matches(user.hashed_password, fingerprint):
+    if (
+        not user
+        or not user.is_active
+        or not PasswordResetService.matches(user.hashed_password, fingerprint)
+    ):
         raise invalid
 
     user.hashed_password = bcrypt.hashpw(

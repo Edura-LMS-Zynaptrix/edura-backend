@@ -45,7 +45,9 @@ def _cache_get(key: str = _STATS_CACHE_KEY):
         return None
 
 
-def _cache_set(value, key: str = _STATS_CACHE_KEY, ttl: int = _STATS_TTL_SECONDS) -> None:
+def _cache_set(
+    value, key: str = _STATS_CACHE_KEY, ttl: int = _STATS_TTL_SECONDS
+) -> None:
     try:
         if _redis:
             _redis.set(key, json.dumps(value), ex=ttl)
@@ -72,9 +74,13 @@ async def platform_stats():
 
     sources = await fetch_platform_sources()
     courses = sources["courses"]
-    enrollment_counts = {row["course_id"]: row["count"] for row in sources["enrollments"]}
+    enrollment_counts = {
+        row["course_id"]: row["count"] for row in sources["enrollments"]
+    }
 
-    ranked = sorted(courses, key=lambda c: enrollment_counts.get(c["id"], 0), reverse=True)
+    ranked = sorted(
+        courses, key=lambda c: enrollment_counts.get(c["id"], 0), reverse=True
+    )
     stats = {
         "total_students": sources["users"].get("total_students", 0),
         "total_courses": len(courses),
@@ -146,14 +152,18 @@ async def send_student_report(user_id: int, _: dict = Depends(require_role(["adm
     pdf = await run_in_threadpool(generate_report_pdf, data)
     now = now_local()
     name = data["student"]["full_name"] or "Student"
-    published = await run_in_threadpool(publish_event, "report.progress", {
-        "user_id": user_id,
-        "email": user["email"],
-        "student_name": name,
-        "month": now.strftime("%B %Y"),
-        "filename": f"Progress_Report_{re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_')}_{now.strftime('%Y%m%d')}.pdf",
-        "pdf_base64": base64.b64encode(pdf).decode("ascii"),
-    })
+    published = await run_in_threadpool(
+        publish_event,
+        "report.progress",
+        {
+            "user_id": user_id,
+            "email": user["email"],
+            "student_name": name,
+            "month": now.strftime("%B %Y"),
+            "filename": f"Progress_Report_{re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_')}_{now.strftime('%Y%m%d')}.pdf",
+            "pdf_base64": base64.b64encode(pdf).decode("ascii"),
+        },
+    )
     if not published:
         raise HTTPException(status_code=503, detail={"error": "REPORT_NOT_QUEUED"})
     return {"message": f"Progress report sent to {user['email']}"}

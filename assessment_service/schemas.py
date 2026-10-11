@@ -261,4 +261,3 @@ class AttemptReviewResponse(BaseModel):
     submitted_at: Optional[datetime] = None
     review: List[ReviewItem] = []
     ranking: AttemptRanking
-

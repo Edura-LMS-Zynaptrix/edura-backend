@@ -24,20 +24,39 @@ def upgrade() -> None:
         sa.Column("session_id", sa.String(length=64), nullable=True, unique=True),
         sa.Column("user_id", sa.Integer(), nullable=True, unique=True),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("last_message_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "last_message_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
     )
     op.create_table(
         "chat_messages",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("conversation_id", sa.Integer(), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
-        sa.Column("is_from_admin", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column(
+            "is_from_admin", sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
         sa.Column("sender_id", sa.Integer(), nullable=True),
         sa.Column("is_read", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
     )
-    op.create_index("ix_chat_messages_conversation_id", "chat_messages", ["conversation_id"])
+    op.create_index(
+        "ix_chat_messages_conversation_id", "chat_messages", ["conversation_id"]
+    )
 
 
 def downgrade() -> None:

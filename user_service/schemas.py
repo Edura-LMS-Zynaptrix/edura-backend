@@ -41,7 +41,11 @@ class UserProfileCreate(BaseModel):
     stream_id: Optional[int] = None
     nic_number: Optional[str] = None
     selected_subjects: Optional[list[str]] = None
-    referral_code: Optional[str] = Field(default=None, max_length=32, description="A code entered by this user, referring them to an existing member")
+    referral_code: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description="A code entered by this user, referring them to an existing member",
+    )
 
     @field_validator("mobile_no")
     @classmethod
@@ -59,7 +63,9 @@ class UserProfileCreate(BaseModel):
             if not self.nic_number:
                 raise ValueError("NIC Number is mandatory for Grade 12 and 13 students")
             if not re.match(NIC_REGEX, self.nic_number):
-                raise ValueError("Invalid NIC format. Format should be 9 digits + V/X or 12 digits.")
+                raise ValueError(
+                    "Invalid NIC format. Format should be 9 digits + V/X or 12 digits."
+                )
         return self
 
 

@@ -22,12 +22,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column(
-        "courses", sa.Column("thumbnail_public_id", sa.String(length=255), nullable=True)
+        "courses",
+        sa.Column("thumbnail_public_id", sa.String(length=255), nullable=True),
     )
     op.add_column("courses", sa.Column("grade", sa.Integer(), nullable=True))
     op.add_column("courses", sa.Column("stream_ids", sa.JSON(), nullable=True))
 
-    op.add_column("modules", sa.Column("image_url", sa.String(length=512), nullable=True))
+    op.add_column(
+        "modules", sa.Column("image_url", sa.String(length=512), nullable=True)
+    )
     op.add_column(
         "modules", sa.Column("image_public_id", sa.String(length=255), nullable=True)
     )
@@ -38,7 +41,8 @@ def upgrade() -> None:
 
     op.add_column("lessons", sa.Column("description", sa.Text(), nullable=True))
     op.add_column(
-        "lessons", sa.Column("cloudinary_public_id", sa.String(length=255), nullable=True)
+        "lessons",
+        sa.Column("cloudinary_public_id", sa.String(length=255), nullable=True),
     )
 
     op.create_table(

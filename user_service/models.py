@@ -11,7 +11,18 @@ import enum
 from datetime import date
 
 from database import Base  # shared Base from database.py
-from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -66,12 +77,18 @@ class UserProfile(Base):
 
     # ── Referrals: each profile gets its own shareable code; referred_by_user_id
     # is set once, at profile creation, from the code the new user entered ────
-    referral_code: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+    referral_code: Mapped[str | None] = mapped_column(
+        String(20), unique=True, nullable=True
+    )
     referred_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Earned when someone you referred first enrolls (display-only, as in the reference platform).
     wallet_credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    total_credits_earned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    total_successful_referrals: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_credits_earned: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    total_successful_referrals: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
 
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -93,7 +110,9 @@ class Stream(Base):
     __tablename__ = "streams"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True
+    )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     subjects: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -141,8 +160,12 @@ class ReferralEvent(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     credit_amount: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    qualified_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    credited_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    qualified_at: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    credited_at: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -155,7 +178,9 @@ class WalletTransaction(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    transaction_type: Mapped[str] = mapped_column(String(30), nullable=False)  # referral_reward | manual_adjustment | spend
+    transaction_type: Mapped[str] = mapped_column(
+        String(30), nullable=False
+    )  # referral_reward | manual_adjustment | spend
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
     reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -163,4 +188,3 @@ class WalletTransaction(Base):
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-

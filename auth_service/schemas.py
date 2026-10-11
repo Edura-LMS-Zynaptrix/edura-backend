@@ -17,7 +17,9 @@ def check_password_strength(password: str) -> str:
     if not re.search(r"\d", password):
         raise ValueError("Password must contain at least one number")
     if not re.search(r"[@$!%*?&#]", password):
-        raise ValueError("Password must contain at least one special character (@$!%*?&#)")
+        raise ValueError(
+            "Password must contain at least one special character (@$!%*?&#)"
+        )
     return password
 
 

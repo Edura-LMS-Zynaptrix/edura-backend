@@ -21,9 +21,11 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
 
         with engine.begin() as conn:
-            conn.execute(text(
-                "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE"
-            ))
+            conn.execute(
+                text(
+                    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
     except Exception as e:
         print(f"Column migration error: {e}", flush=True)
 

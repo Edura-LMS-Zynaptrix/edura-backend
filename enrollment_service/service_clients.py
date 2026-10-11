@@ -25,17 +25,23 @@ async def course_info(course_id: int) -> dict | None:
     for attempt in (1, 2):
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                r = await client.get(f"{COURSE_SERVICE_URL}/internal/courses/{course_id}")
+                r = await client.get(
+                    f"{COURSE_SERVICE_URL}/internal/courses/{course_id}"
+                )
             if r.status_code == 404:
                 return None
             r.raise_for_status()
             return r.json()
         except Exception as e:
-            logger.warning("Course lookup for %s failed (attempt %s): %r", course_id, attempt, e)
+            logger.warning(
+                "Course lookup for %s failed (attempt %s): %r", course_id, attempt, e
+            )
     return None
 
 
-async def students(grades: list[int] | None, search: str | None, limit: int = 100) -> list[dict]:
+async def students(
+    grades: list[int] | None, search: str | None, limit: int = 100
+) -> list[dict]:
     params: dict = {"limit": limit}
     if grades:
         params["grades"] = ",".join(map(str, grades))
@@ -69,8 +75,14 @@ async def streams() -> dict[int, str]:
     """Active A/L streams {id: name} from user_service (public endpoint)."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{USER_SERVICE_URL}/streams", params={"active_only": "true"})
-        return {int(row["id"]): row["name"] for row in r.json()} if r.status_code == 200 else {}
+            r = await client.get(
+                f"{USER_SERVICE_URL}/streams", params={"active_only": "true"}
+            )
+        return (
+            {int(row["id"]): row["name"] for row in r.json()}
+            if r.status_code == 200
+            else {}
+        )
     except Exception as e:
         logger.error("Stream lookup failed: %s", e)
         return {}
@@ -84,4 +96,3 @@ async def published_courses() -> list[dict]:
     except Exception as e:
         logger.error("Published course lookup failed: %r", e)
         return []
-

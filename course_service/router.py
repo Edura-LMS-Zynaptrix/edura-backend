@@ -102,19 +102,27 @@ def _assert_viewable(course: Course, payload: dict | None) -> None:
         raise HTTPException(status_code=404, detail={"error": "COURSE_NOT_FOUND"})
 
 
-async def _assert_can_open_content(course: Course, payload: dict | None, module_id: int | None = None) -> None:
+async def _assert_can_open_content(
+    course: Course, payload: dict | None, module_id: int | None = None
+) -> None:
     """Video ids and material files are paid content — students need an active enrollment."""
     if payload is None:
         raise HTTPException(
             status_code=401,
-            detail={"error": "AUTH_REQUIRED", "message": "Log in to access course content"},
+            detail={
+                "error": "AUTH_REQUIRED",
+                "message": "Log in to access course content",
+            },
         )
     if payload.get("role", "").lower() == "student" and not await is_enrolled(
         int(payload["sub"]), course.id, module_id
     ):
         raise HTTPException(
             status_code=403,
-            detail={"error": "NOT_ENROLLED", "message": "Enroll in this course to access its content"},
+            detail={
+                "error": "NOT_ENROLLED",
+                "message": "Enroll in this course to access its content",
+            },
         )
 
 
@@ -146,7 +154,9 @@ def _module_responses(
     return grouped
 
 
-def _checkpoints_for(lesson_ids: list[int], db: Session) -> dict[int, list[CheckpointResponse]]:
+def _checkpoints_for(
+    lesson_ids: list[int], db: Session
+) -> dict[int, list[CheckpointResponse]]:
     """Checkpoints (with questions) for many videos in two queries, keyed by lesson id."""
     if not lesson_ids:
         return {}
@@ -163,12 +173,16 @@ def _checkpoints_for(lesson_ids: list[int], db: Session) -> dict[int, list[Check
             .filter(CheckpointQuestion.checkpoint_id.in_([c.id for c in checkpoints]))
             .order_by(CheckpointQuestion.order_number, CheckpointQuestion.id)
         ):
-            questions.setdefault(q.checkpoint_id, []).append(CheckpointQuestionResponse.model_validate(q))
+            questions.setdefault(q.checkpoint_id, []).append(
+                CheckpointQuestionResponse.model_validate(q)
+            )
     grouped: dict[int, list[CheckpointResponse]] = {}
     for c in checkpoints:
         grouped.setdefault(c.lesson_id, []).append(
             CheckpointResponse(
-                id=c.id, video_id=c.lesson_id, timestamp_seconds=c.timestamp_seconds,
+                id=c.id,
+                video_id=c.lesson_id,
+                timestamp_seconds=c.timestamp_seconds,
                 questions=questions.get(c.id, []),
             )
         )
@@ -178,8 +192,12 @@ def _checkpoints_for(lesson_ids: list[int], db: Session) -> dict[int, list[Check
 def _delete_checkpoints(db: Session, condition) -> None:
     ids = [cid for (cid,) in db.query(VideoCheckpoint.id).filter(condition)]
     if ids:
-        db.query(CheckpointQuestion).filter(CheckpointQuestion.checkpoint_id.in_(ids)).delete(synchronize_session=False)
-        db.query(VideoCheckpoint).filter(VideoCheckpoint.id.in_(ids)).delete(synchronize_session=False)
+        db.query(CheckpointQuestion).filter(
+            CheckpointQuestion.checkpoint_id.in_(ids)
+        ).delete(synchronize_session=False)
+        db.query(VideoCheckpoint).filter(VideoCheckpoint.id.in_(ids)).delete(
+            synchronize_session=False
+        )
 
 
 def _get_material_or_404(material_id: int, module_id: int, db: Session) -> Material:
@@ -193,7 +211,9 @@ def _get_material_or_404(material_id: int, module_id: int, db: Session) -> Mater
     return material
 
 
-def _assert_lesson_in_module(lesson_id: int | None, module_id: int, db: Session) -> None:
+def _assert_lesson_in_module(
+    lesson_id: int | None, module_id: int, db: Session
+) -> None:
     if lesson_id is None:
         return
     exists = (
@@ -238,11 +258,18 @@ async def create_course(
 @router.get("/", response_model=PaginatedCoursesResponse)
 async def list_courses(
     status: str = Query(None),
-    grade: int | None = Query(None, description="The viewer's own grade — applies the O/L (10↔11) and A/L (12↔13) unlock bands"),
-    stream_id: int | None = Query(None, description="The viewer's own A/L stream (only applied for grade 12/13)"),
+    grade: int | None = Query(
+        None,
+        description="The viewer's own grade — applies the O/L (10↔11) and A/L (12↔13) unlock bands",
+    ),
+    stream_id: int | None = Query(
+        None, description="The viewer's own A/L stream (only applied for grade 12/13)"
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    include_modules: bool = Query(False, description="Nest each course's modules (lessons) in the response"),
+    include_modules: bool = Query(
+        False, description="Nest each course's modules (lessons) in the response"
+    ),
     payload: dict | None = Depends(get_optional_payload),
     db: Session = Depends(get_db),
 ):
@@ -274,8 +301,7 @@ async def list_courses(
     if apply_stream_filter:
         all_matching = q.order_by(Course.id).all()
         filtered = [
-            c for c in all_matching
-            if not c.stream_ids or stream_id in c.stream_ids
+            c for c in all_matching if not c.stream_ids or stream_id in c.stream_ids
         ]
         total = len(filtered)
         courses = filtered[(page - 1) * page_size : (page - 1) * page_size + page_size]
@@ -337,8 +363,14 @@ async def course_info_internal(course_id: int, db: Session = Depends(get_db)):
         "title": course.title,
         "grade": course.grade,
         "stream_ids": course.stream_ids or [],
-        "course_type": course.course_type.value if hasattr(course.course_type, "value") else course.course_type,
-        "status": course.status.value if hasattr(course.status, "value") else course.status,
+        "course_type": (
+            course.course_type.value
+            if hasattr(course.course_type, "value")
+            else course.course_type
+        ),
+        "status": (
+            course.status.value if hasattr(course.status, "value") else course.status
+        ),
     }
 
 
@@ -348,7 +380,9 @@ def course_modules_internal(course_id: int, db: Session = Depends(get_db)):
     _get_course_or_404(course_id, db)
     return [
         {"id": m.id, "title": m.title, "order": m.position}
-        for m in db.query(Module).filter(Module.course_id == course_id).order_by(Module.position, Module.id)
+        for m in db.query(Module)
+        .filter(Module.course_id == course_id)
+        .order_by(Module.position, Module.id)
     ]
 
 
@@ -542,7 +576,9 @@ async def delete_module(
     module = _get_module_or_404(module_id, course_id, db)
 
     # No cross-table FK constraints in this schema — clear children first.
-    lesson_ids = [lid for (lid,) in db.query(Lesson.id).filter(Lesson.module_id == module_id)]
+    lesson_ids = [
+        lid for (lid,) in db.query(Lesson.id).filter(Lesson.module_id == module_id)
+    ]
     if lesson_ids:
         _delete_checkpoints(db, VideoCheckpoint.lesson_id.in_(lesson_ids))
     db.query(Material).filter(Material.module_id == module_id).delete()
@@ -658,9 +694,7 @@ async def update_lesson(
     return LessonResponse.from_orm_lesson(lesson)
 
 
-@router.delete(
-    "/{course_id}/modules/{module_id}/lessons/{lesson_id}", status_code=204
-)
+@router.delete("/{course_id}/modules/{module_id}/lessons/{lesson_id}", status_code=204)
 async def delete_lesson(
     course_id: int,
     module_id: int,
@@ -703,7 +737,9 @@ async def delete_lesson(
 async def list_materials(
     course_id: int,
     module_id: int,
-    lesson_id: int | None = Query(None, description="Only materials pinned to this video"),
+    lesson_id: int | None = Query(
+        None, description="Only materials pinned to this video"
+    ),
     payload: dict | None = Depends(get_optional_payload),
     db: Session = Depends(get_db),
 ):
@@ -805,7 +841,9 @@ async def delete_material(
 # In-video quiz checkpoints (ungraded practice inside a video)
 # ---------------------------------------------------------------------------
 
-_CHECKPOINT_CSV_HEADER = "timestamp_seconds,question_text,a,b,c,d,e,correct_option,explanation\n"
+_CHECKPOINT_CSV_HEADER = (
+    "timestamp_seconds,question_text,a,b,c,d,e,correct_option,explanation\n"
+)
 _CHECKPOINT_CSV_EXAMPLE = (
     "1:30,What is the first step of this process?,Gathering data,Analyzing data,Reporting,None of the above,,a,Always gather data first.\n"
     "10:00,Is this a blocking quiz?,Yes,No,,,,a,Students must answer correctly to proceed.\n"
@@ -827,21 +865,33 @@ def _parse_timestamp(raw: str) -> int | None:
     return None
 
 
-def _get_video_for_owner(course_id: int, module_id: int, lesson_id: int, payload: dict, db: Session) -> Lesson:
+def _get_video_for_owner(
+    course_id: int, module_id: int, lesson_id: int, payload: dict, db: Session
+) -> Lesson:
     course = _get_course_or_404(course_id, db)
     assert_course_owner(course, int(payload["sub"]), payload.get("role", "").lower())
     _get_module_or_404(module_id, course_id, db)
-    lesson = db.query(Lesson).filter(Lesson.id == lesson_id, Lesson.module_id == module_id).first()
+    lesson = (
+        db.query(Lesson)
+        .filter(Lesson.id == lesson_id, Lesson.module_id == module_id)
+        .first()
+    )
     if not lesson:
         raise HTTPException(status_code=404, detail={"error": "LESSON_NOT_FOUND"})
     return lesson
 
 
-def _checkpoint_for_owner(checkpoint_id: int, payload: dict, db: Session) -> VideoCheckpoint:
+def _checkpoint_for_owner(
+    checkpoint_id: int, payload: dict, db: Session
+) -> VideoCheckpoint:
     cp = db.query(VideoCheckpoint).filter(VideoCheckpoint.id == checkpoint_id).first()
     if not cp:
         raise HTTPException(status_code=404, detail={"error": "CHECKPOINT_NOT_FOUND"})
-    assert_course_owner(_get_course_or_404(cp.course_id, db), int(payload["sub"]), payload.get("role", "").lower())
+    assert_course_owner(
+        _get_course_or_404(cp.course_id, db),
+        int(payload["sub"]),
+        payload.get("role", "").lower(),
+    )
     return cp
 
 
@@ -850,7 +900,9 @@ async def checkpoint_csv_template(_: dict = Depends(require_role(_TEACHER_ADMIN)
     return Response(
         content=_CHECKPOINT_CSV_HEADER + _CHECKPOINT_CSV_EXAMPLE,
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="video_checkpoints_template.csv"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="video_checkpoints_template.csv"'
+        },
     )
 
 
@@ -869,7 +921,9 @@ async def list_checkpoints(
     return _checkpoints_for([lesson_id], db).get(lesson_id, [])
 
 
-@router.post("/{course_id}/modules/{module_id}/lessons/{lesson_id}/checkpoints/import-csv")
+@router.post(
+    "/{course_id}/modules/{module_id}/lessons/{lesson_id}/checkpoints/import-csv"
+)
 async def import_checkpoints_csv(
     course_id: int,
     module_id: int,
@@ -882,21 +936,35 @@ async def import_checkpoints_csv(
     _get_video_for_owner(course_id, module_id, lesson_id, payload, db)
     raw = await file.read()
     if len(raw) > _MAX_CHECKPOINT_CSV:
-        raise HTTPException(status_code=413, detail={"error": "FILE_TOO_LARGE", "message": "CSV exceeds the 1 MB limit"})
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "FILE_TOO_LARGE", "message": "CSV exceeds the 1 MB limit"},
+        )
     try:
         text_content = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        raise HTTPException(status_code=422, detail={"error": "INVALID_ENCODING", "message": "CSV must be UTF-8 encoded"})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "INVALID_ENCODING",
+                "message": "CSV must be UTF-8 encoded",
+            },
+        )
 
     existing = {
         cp.timestamp_seconds: cp
-        for cp in db.query(VideoCheckpoint).filter(VideoCheckpoint.lesson_id == lesson_id)
+        for cp in db.query(VideoCheckpoint).filter(
+            VideoCheckpoint.lesson_id == lesson_id
+        )
     }
     created_questions = 0
     touched: set[int] = set()
     errors: list[str] = []
-    for row_number, row in enumerate(csv.DictReader(io.StringIO(text_content)), start=2):
-        def cell(name: str) -> str:
+    for row_number, row in enumerate(
+        csv.DictReader(io.StringIO(text_content)), start=2
+    ):
+
+        def cell(name: str, row: dict = row) -> str:
             return (row.get(name) or "").strip()
 
         ts = _parse_timestamp(cell("timestamp_seconds"))
@@ -909,25 +977,38 @@ async def import_checkpoints_csv(
         filled = {letter for letter in "abcde" if cell(letter)}
         answer = cell("correct_option").lower()
         if answer not in filled:
-            errors.append(f"Row {row_number}: correct_option must be one of {', '.join(sorted(filled))}")
+            errors.append(
+                f"Row {row_number}: correct_option must be one of {', '.join(sorted(filled))}"
+            )
             continue
 
         cp = existing.get(ts)
         if cp is None:
-            cp = VideoCheckpoint(course_id=course_id, lesson_id=lesson_id, timestamp_seconds=ts)
+            cp = VideoCheckpoint(
+                course_id=course_id, lesson_id=lesson_id, timestamp_seconds=ts
+            )
             db.add(cp)
             db.flush()
             existing[ts] = cp
-        order = db.query(CheckpointQuestion).filter(CheckpointQuestion.checkpoint_id == cp.id).count()
-        db.add(CheckpointQuestion(
-            checkpoint_id=cp.id,
-            question_text=cell("question_text"),
-            option_a=cell("a"), option_b=cell("b"),
-            option_c=cell("c") or None, option_d=cell("d") or None, option_e=cell("e") or None,
-            correct_option=answer,
-            explanation=cell("explanation") or None,
-            order_number=order,
-        ))
+        order = (
+            db.query(CheckpointQuestion)
+            .filter(CheckpointQuestion.checkpoint_id == cp.id)
+            .count()
+        )
+        db.add(
+            CheckpointQuestion(
+                checkpoint_id=cp.id,
+                question_text=cell("question_text"),
+                option_a=cell("a"),
+                option_b=cell("b"),
+                option_c=cell("c") or None,
+                option_d=cell("d") or None,
+                option_e=cell("e") or None,
+                correct_option=answer,
+                explanation=cell("explanation") or None,
+                order_number=order,
+            )
+        )
         db.flush()
         touched.add(cp.id)
         created_questions += 1
@@ -940,7 +1021,9 @@ async def import_checkpoints_csv(
     }
 
 
-@router.delete("/{course_id}/modules/{module_id}/lessons/{lesson_id}/checkpoints", status_code=204)
+@router.delete(
+    "/{course_id}/modules/{module_id}/lessons/{lesson_id}/checkpoints", status_code=204
+)
 async def clear_checkpoints(
     course_id: int,
     module_id: int,
@@ -965,7 +1048,9 @@ async def update_checkpoint(
         raise HTTPException(status_code=422, detail={"error": "INVALID_TIMESTAMP"})
     cp.timestamp_seconds = body.timestamp_seconds
     db.commit()
-    return next(c for c in _checkpoints_for([cp.lesson_id], db)[cp.lesson_id] if c.id == cp.id)
+    return next(
+        c for c in _checkpoints_for([cp.lesson_id], db)[cp.lesson_id] if c.id == cp.id
+    )
 
 
 @router.delete("/checkpoints/{checkpoint_id}", status_code=204)
@@ -979,28 +1064,53 @@ async def delete_checkpoint(
     db.commit()
 
 
-@router.patch("/checkpoint-questions/{question_id}", response_model=CheckpointQuestionResponse)
+@router.patch(
+    "/checkpoint-questions/{question_id}", response_model=CheckpointQuestionResponse
+)
 async def update_checkpoint_question(
     question_id: int,
     body: CheckpointQuestionUpdate,
     payload: dict = Depends(require_role(_TEACHER_ADMIN)),
     db: Session = Depends(get_db),
 ):
-    q = db.query(CheckpointQuestion).filter(CheckpointQuestion.id == question_id).first()
+    q = (
+        db.query(CheckpointQuestion)
+        .filter(CheckpointQuestion.id == question_id)
+        .first()
+    )
     if not q:
         raise HTTPException(status_code=404, detail={"error": "QUESTION_NOT_FOUND"})
     _checkpoint_for_owner(q.checkpoint_id, payload, db)
     updates = body.model_dump(exclude_unset=True)
     for field in ("question_text", "option_a", "option_b"):
         if field in updates and not (updates[field] or "").strip():
-            raise HTTPException(status_code=422, detail={"error": "FIELD_REQUIRED", "message": f"{field} cannot be empty"})
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "FIELD_REQUIRED",
+                    "message": f"{field} cannot be empty",
+                },
+            )
     for field, value in updates.items():
-        setattr(q, field, value.strip() if isinstance(value, str) and field != "correct_option" else value)
+        setattr(
+            q,
+            field,
+            (
+                value.strip()
+                if isinstance(value, str) and field != "correct_option"
+                else value
+            ),
+        )
     answer = q.correct_option
     if not getattr(q, f"option_{answer}", None):
         db.rollback()
-        raise HTTPException(status_code=422, detail={"error": "INVALID_ANSWER", "message": "correct_option points at an empty option"})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "INVALID_ANSWER",
+                "message": "correct_option points at an empty option",
+            },
+        )
     db.commit()
     db.refresh(q)
     return q
-

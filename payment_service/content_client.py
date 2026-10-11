@@ -27,7 +27,9 @@ async def upload_receipt(content: bytes, filename: str) -> Tuple[str, str]:
         )
 
     if r.status_code != 200:
-        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail", r.text))
+        raise HTTPException(
+            status_code=r.status_code, detail=r.json().get("detail", r.text)
+        )
 
     data = r.json()
     return data["secure_url"], data["public_id"]

@@ -18,7 +18,8 @@ async def display_names(user_ids: list[int]) -> dict[int, str]:
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
             r = await client.get(
-                f"{USER_SERVICE_URL}/internal/names", params={"ids": ",".join(map(str, ids))}
+                f"{USER_SERVICE_URL}/internal/names",
+                params={"ids": ",".join(map(str, ids))},
             )
             if r.status_code == 200:
                 names = {int(k): v for k, v in r.json().items() if v}

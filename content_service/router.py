@@ -184,12 +184,16 @@ async def upload_material(
     content = await file.read()
     if not content:
         raise HTTPException(
-            status_code=422, detail={"error": "EMPTY_FILE", "message": "Uploaded file is empty"}
+            status_code=422,
+            detail={"error": "EMPTY_FILE", "message": "Uploaded file is empty"},
         )
     if len(content) > MAX_MATERIAL_SIZE:
         raise HTTPException(
             status_code=413,
-            detail={"error": "FILE_TOO_LARGE", "message": "Material exceeds the 20 MB limit"},
+            detail={
+                "error": "FILE_TOO_LARGE",
+                "message": "Material exceeds the 20 MB limit",
+            },
         )
 
     declared_mime = file.content_type or ""
@@ -245,7 +249,10 @@ async def delete_uploaded_asset(
     if not public_id.startswith(DELETABLE_PREFIX) or ".." in public_id:
         raise HTTPException(
             status_code=403,
-            detail={"error": "ASSET_NOT_DELETABLE", "message": "Only uploaded content assets can be deleted"},
+            detail={
+                "error": "ASSET_NOT_DELETABLE",
+                "message": "Only uploaded content assets can be deleted",
+            },
         )
     # Already-gone assets are not an error: the caller just wants it absent.
     delete_asset(public_id)
@@ -330,16 +337,26 @@ async def upload_image_internal(file: UploadFile = File(...)):
     """
     content = await file.read()
     if not content:
-        raise HTTPException(status_code=422, detail={"error": "EMPTY_FILE", "message": "Image is empty"})
+        raise HTTPException(
+            status_code=422, detail={"error": "EMPTY_FILE", "message": "Image is empty"}
+        )
     if len(content) > _MAX_INTERNAL_IMAGE:
-        raise HTTPException(status_code=413, detail={"error": "FILE_TOO_LARGE", "message": "Image exceeds 10 MB"})
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "FILE_TOO_LARGE", "message": "Image exceeds 10 MB"},
+        )
     detected_mime = magic.from_buffer(content, mime=True)
     if detected_mime not in _INTERNAL_IMAGE_TYPES:
         raise HTTPException(
             status_code=415,
-            detail={"error": "NOT_AN_IMAGE", "message": f"File content is '{detected_mime}', not an image"},
+            detail={
+                "error": "NOT_AN_IMAGE",
+                "message": f"File content is '{detected_mime}', not an image",
+            },
         )
-    public_id, secure_url = upload_asset(content, file.filename or "image", resource_type="image")
+    public_id, secure_url = upload_asset(
+        content, file.filename or "image", resource_type="image"
+    )
     return UploadValidationResponse(
         valid=True,
         filename=file.filename or "",

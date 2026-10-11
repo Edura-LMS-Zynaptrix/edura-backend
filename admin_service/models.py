@@ -113,7 +113,9 @@ class ChatConversation(Base):
     __tablename__ = "chat_conversations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    session_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_message_at: Mapped[DateTime] = mapped_column(
@@ -136,4 +138,3 @@ class ChatMessage(Base):
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-

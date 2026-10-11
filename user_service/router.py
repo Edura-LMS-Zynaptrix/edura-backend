@@ -5,13 +5,17 @@ from auth_client import get_all_auth_users, get_auth_user
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from models import GradeSubject, ProfileRole, Stream, UserProfile
+from referrals import apply_code as apply_referral_code
+from referrals import bind_referral, find_referrer
+from referrals import events_for as referral_events_for
+from referrals import summary as referral_summary_of
 from schemas import (
-    ReferralApplyRequest,
     GradeSubjectCreate,
     GradeSubjectResponse,
     GradeSubjectUpdate,
     InternalProfileCreateRequest,
     PaginatedUsersResponse,
+    ReferralApplyRequest,
     RoleStatsResponse,
     RoleUpdateRequest,
     StreamCreate,
@@ -21,10 +25,6 @@ from schemas import (
     UserProfileResponse,
     UserProfileUpdate,
 )
-from referrals import apply_code as apply_referral_code
-from referrals import bind_referral, find_referrer
-from referrals import events_for as referral_events_for
-from referrals import summary as referral_summary_of
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -68,7 +68,9 @@ def _generate_referral_code(db: Session, first_name: str) -> str:
     against the (unique) referral_code column with a handful of retries."""
     prefix = "".join(ch for ch in first_name.upper() if ch.isalpha())[:4] or "USER"
     for _ in range(10):
-        suffix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+        suffix = "".join(
+            secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4)
+        )
         code = f"{prefix}{suffix}"
         if not db.query(UserProfile).filter(UserProfile.referral_code == code).first():
             return code
@@ -114,10 +116,14 @@ async def list_users(
             )
         )
 
-    return PaginatedUsersResponse(total=total, page=page, page_size=page_size, items=items)
+    return PaginatedUsersResponse(
+        total=total, page=page, page_size=page_size, items=items
+    )
 
 
-@router.post("/", response_model=UserProfileResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/", response_model=UserProfileResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_own_profile(
     body: UserProfileCreate,
     payload: dict = Depends(require_role(_ALL_ROLES)),
@@ -137,7 +143,10 @@ async def create_own_profile(
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"error": "PROFILE_EXISTS", "message": "Profile already exists for this user"},
+            detail={
+                "error": "PROFILE_EXISTS",
+                "message": "Profile already exists for this user",
+            },
         )
 
     # An unrecognised code is ignored rather than blocking registration.
@@ -171,8 +180,14 @@ async def create_own_profile(
     return _to_response(profile, email=email)
 
 
-@router.post("/internal/create-profile", response_model=UserProfileResponse, status_code=status.HTTP_201_CREATED)
-async def create_profile_internal(body: InternalProfileCreateRequest, db: Session = Depends(get_db)):
+@router.post(
+    "/internal/create-profile",
+    response_model=UserProfileResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_profile_internal(
+    body: InternalProfileCreateRequest, db: Session = Depends(get_db)
+):
     """
     Unauthenticated, service-to-service only (blocked at the gateway). Called
     by auth_service when it creates an account itself: an admin made by
@@ -217,7 +232,9 @@ async def list_streams(active_only: bool = Query(True), db: Session = Depends(ge
     return q.order_by(Stream.name).all()
 
 
-@router.post("/streams", response_model=StreamResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/streams", response_model=StreamResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_stream(
     body: StreamCreate,
     payload: dict = Depends(require_role(["admin"])),
@@ -274,7 +291,11 @@ async def list_grade_subjects(
     return q.order_by(GradeSubject.grade, GradeSubject.name).all()
 
 
-@router.post("/grade-subjects", response_model=GradeSubjectResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/grade-subjects",
+    response_model=GradeSubjectResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_grade_subject(
     body: GradeSubjectCreate,
     payload: dict = Depends(require_role(["admin"])),
@@ -331,12 +352,16 @@ async def get_subjects_for_grade(
     if grade in (12, 13):
         if stream_id is None:
             return []
-        stream = db.query(Stream).filter(Stream.id == stream_id, Stream.is_active == True).first()  # noqa: E712
+        stream = (
+            db.query(Stream)
+            .filter(Stream.id == stream_id, Stream.is_active.is_(True))
+            .first()
+        )  # noqa: E712
         return stream.subjects if stream else []
 
     rows = (
         db.query(GradeSubject)
-        .filter(GradeSubject.grade == grade, GradeSubject.is_active == True)  # noqa: E712
+        .filter(GradeSubject.grade == grade, GradeSubject.is_active.is_(True))
         .order_by(GradeSubject.name)
         .all()
     )
@@ -344,7 +369,9 @@ async def get_subjects_for_grade(
 
 
 def _own_profile(payload: dict, db: Session) -> UserProfile:
-    profile = db.query(UserProfile).filter(UserProfile.user_id == int(payload["sub"])).first()
+    profile = (
+        db.query(UserProfile).filter(UserProfile.user_id == int(payload["sub"])).first()
+    )
     if not profile:
         raise HTTPException(status_code=404, detail={"error": "PROFILE_NOT_FOUND"})
     return profile
@@ -380,7 +407,9 @@ async def referral_apply(
 
 @router.get("/internal/students")
 async def students_internal(
-    grades: str | None = Query(None, description="Comma-separated grades; omit for all"),
+    grades: str | None = Query(
+        None, description="Comma-separated grades; omit for all"
+    ),
     search: str | None = Query(None, max_length=100),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -408,7 +437,9 @@ async def students_internal(
             "district": p.district,
             "school": p.school,
         }
-        for p in q.order_by(UserProfile.first_name, UserProfile.last_name).limit(limit).all()
+        for p in q.order_by(UserProfile.first_name, UserProfile.last_name)
+        .limit(limit)
+        .all()
     ]
 
 
@@ -483,7 +514,9 @@ def student_breakdown_internal(db: Session = Depends(get_db)):
     )
     by_district = (
         db.query(UserProfile.district, func.count(UserProfile.id))
-        .filter(is_student, UserProfile.district.isnot(None), UserProfile.district != "")
+        .filter(
+            is_student, UserProfile.district.isnot(None), UserProfile.district != ""
+        )
         .group_by(UserProfile.district)
         .order_by(func.count(UserProfile.id).desc(), UserProfile.district)
         .limit(10)
@@ -497,7 +530,10 @@ def student_breakdown_internal(db: Session = Depends(get_db)):
         .all()
     )
     return {
-        "total_students": db.query(func.count(UserProfile.id)).filter(is_student).scalar() or 0,
+        "total_students": db.query(func.count(UserProfile.id))
+        .filter(is_student)
+        .scalar()
+        or 0,
         "by_grade": [{"grade": g, "count": c} for g, c in by_grade],
         "by_district": [{"district": d, "count": c} for d, c in by_district],
         "recent_students": [
@@ -516,9 +552,15 @@ def student_breakdown_internal(db: Session = Depends(get_db)):
 async def get_role_stats_internal(db: Session = Depends(get_db)):
     """Service-to-service only (blocked at the gateway): analytics_service's public homepage stats."""
     return RoleStatsResponse(
-        total_students=db.query(UserProfile).filter(UserProfile.role == ProfileRole.student).count(),
-        total_teachers=db.query(UserProfile).filter(UserProfile.role == ProfileRole.teacher).count(),
-        total_admins=db.query(UserProfile).filter(UserProfile.role == ProfileRole.admin).count(),
+        total_students=db.query(UserProfile)
+        .filter(UserProfile.role == ProfileRole.student)
+        .count(),
+        total_teachers=db.query(UserProfile)
+        .filter(UserProfile.role == ProfileRole.teacher)
+        .count(),
+        total_admins=db.query(UserProfile)
+        .filter(UserProfile.role == ProfileRole.admin)
+        .count(),
     )
 
 
@@ -530,9 +572,15 @@ async def get_role_stats(
     """Admin dashboard headline counts — cheap grouped COUNT query, no
     cross-service call needed since role lives on the profile itself."""
     return RoleStatsResponse(
-        total_students=db.query(UserProfile).filter(UserProfile.role == ProfileRole.student).count(),
-        total_teachers=db.query(UserProfile).filter(UserProfile.role == ProfileRole.teacher).count(),
-        total_admins=db.query(UserProfile).filter(UserProfile.role == ProfileRole.admin).count(),
+        total_students=db.query(UserProfile)
+        .filter(UserProfile.role == ProfileRole.student)
+        .count(),
+        total_teachers=db.query(UserProfile)
+        .filter(UserProfile.role == ProfileRole.teacher)
+        .count(),
+        total_admins=db.query(UserProfile)
+        .filter(UserProfile.role == ProfileRole.admin)
+        .count(),
     )
 
 

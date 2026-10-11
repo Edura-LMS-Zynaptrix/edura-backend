@@ -28,10 +28,11 @@ async def get_course_titles(course_ids: list[int]) -> dict[int, str]:
     url = f"{COURSE_SERVICE_URL}/internal/titles"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(url, params={"ids": ",".join(str(i) for i in sorted(set(course_ids)))})
+            r = await client.get(
+                url, params={"ids": ",".join(str(i) for i in sorted(set(course_ids)))}
+            )
         if r.status_code != 200:
             return {}
         return {int(k): v for k, v in r.json().items()}
     except Exception:
         return {}
-

@@ -23,6 +23,8 @@ async def get_course_price(course_id: int) -> Optional[float]:
     if r.status_code == 404:
         return None
     if r.status_code != 200:
-        raise HTTPException(status_code=r.status_code, detail=r.json().get("detail", r.text))
+        raise HTTPException(
+            status_code=r.status_code, detail=r.json().get("detail", r.text)
+        )
 
     return float(r.json()["price"])

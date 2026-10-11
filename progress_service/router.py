@@ -9,7 +9,11 @@ from schemas import (
     LessonProgressUpdateRequest,
     ProgressDashboardResponse,
 )
-from services import get_course_leaderboard, get_student_course_progress, process_lesson_watched
+from services import (
+    get_course_leaderboard,
+    get_student_course_progress,
+    process_lesson_watched,
+)
 from sqlalchemy.orm import Session
 
 from shared.auth import require_role
@@ -110,7 +114,10 @@ def get_lesson_progress(
     student_id = int(user_payload["sub"])
     rows = (
         db.query(LessonProgress)
-        .filter(LessonProgress.student_id == student_id, LessonProgress.course_id == course_id)
+        .filter(
+            LessonProgress.student_id == student_id,
+            LessonProgress.course_id == course_id,
+        )
         .all()
     )
     return [

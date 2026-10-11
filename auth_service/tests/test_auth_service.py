@@ -195,7 +195,9 @@ def _request_reset(email: str):
 
 
 def test_forgot_password_does_not_reveal_unknown_emails():
-    client.post("/register", json={"email": "known@edura.com", "password": "Password@123"})
+    client.post(
+        "/register", json={"email": "known@edura.com", "password": "Password@123"}
+    )
     known, published = _request_reset("known@edura.com")
     unknown, not_published = _request_reset("nobody@edura.com")
 
@@ -222,7 +224,11 @@ def test_reset_password_flow_is_single_use_and_signs_out():
 
     mismatch = client.post(
         "/reset-password",
-        json={"token": token, "new_password": "NewPass@456", "confirm_password": "Other@456"},
+        json={
+            "token": token,
+            "new_password": "NewPass@456",
+            "confirm_password": "Other@456",
+        },
     )
     assert mismatch.status_code == 422
 
@@ -231,27 +237,51 @@ def test_reset_password_flow_is_single_use_and_signs_out():
     with patch("router.publish_event"):
         ok = client.post(
             "/reset-password",
-            json={"token": token, "new_password": "NewPass@456", "confirm_password": "NewPass@456"},
+            json={
+                "token": token,
+                "new_password": "NewPass@456",
+                "confirm_password": "NewPass@456",
+            },
         )
     assert ok.status_code == 200
 
-    assert client.post("/login", json={"email": email, "password": "Password@123"}).status_code == 401
-    assert client.post("/login", json={"email": email, "password": "NewPass@456"}).status_code == 200
+    assert (
+        client.post(
+            "/login", json={"email": email, "password": "Password@123"}
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/login", json={"email": email, "password": "NewPass@456"}
+        ).status_code
+        == 200
+    )
 
     # The link can't be replayed, and sessions from before the reset are gone.
     replay = client.post(
         "/reset-password",
-        json={"token": token, "new_password": "Again@789", "confirm_password": "Again@789"},
+        json={
+            "token": token,
+            "new_password": "Again@789",
+            "confirm_password": "Again@789",
+        },
     )
     assert replay.status_code == 400
     assert replay.json()["detail"]["error"] == "INVALID_RESET_TOKEN"
-    assert client.post("/refresh", json={"refresh_token": old_refresh}).status_code == 401
+    assert (
+        client.post("/refresh", json={"refresh_token": old_refresh}).status_code == 401
+    )
 
 
 def test_reset_password_rejects_garbage_token():
     resp = client.post(
         "/reset-password",
-        json={"token": "not-a-token", "new_password": "NewPass@456", "confirm_password": "NewPass@456"},
+        json={
+            "token": "not-a-token",
+            "new_password": "NewPass@456",
+            "confirm_password": "NewPass@456",
+        },
     )
     assert resp.status_code == 400
 

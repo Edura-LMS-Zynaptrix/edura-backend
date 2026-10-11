@@ -52,7 +52,9 @@ def test_send_email_with_pdf_attachment():
             to_email="recipient@example.com",
             subject="Report",
             html_body="<p>Attached</p>",
-            attachments=[{"filename": "report.pdf", "data": b"%PDF-1.4 test", "subtype": "pdf"}],
+            attachments=[
+                {"filename": "report.pdf", "data": b"%PDF-1.4 test", "subtype": "pdf"}
+            ],
         )
 
         raw = mock_smtp_inst.sendmail.call_args[0][2]

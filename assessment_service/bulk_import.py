@@ -22,7 +22,9 @@ MAX_UNCOMPRESSED_BYTES = 300 * 1024 * 1024
 SL_TIME = timezone(timedelta(hours=5, minutes=30))
 
 
-def import_question_rows(db: Session, assessment_id: int, text_content: str) -> tuple[int, list[str]]:
+def import_question_rows(
+    db: Session, assessment_id: int, text_content: str
+) -> tuple[int, list[str]]:
     """Append MCQ rows (questions.csv shape) to an exam. Returns (created, row errors). Caller commits."""
     next_position = (
         db.query(func.coalesce(func.max(Question.position), 0))
@@ -32,8 +34,11 @@ def import_question_rows(db: Session, assessment_id: int, text_content: str) -> 
     )
     created = 0
     errors: list[str] = []
-    for row_number, row in enumerate(csv.DictReader(io.StringIO(text_content)), start=2):
-        def cell(name: str) -> str:
+    for row_number, row in enumerate(
+        csv.DictReader(io.StringIO(text_content)), start=2
+    ):
+
+        def cell(name: str, row: dict = row) -> str:
             return (row.get(name) or "").strip()
 
         question_text = cell("question_text")
@@ -43,12 +48,16 @@ def import_question_rows(db: Session, assessment_id: int, text_content: str) -> 
             errors.append(f"Row {row_number}: question_text is empty")
             continue
         if len(filled) < 2:
-            errors.append(f"Row {row_number}: at least option_a and option_b are required")
+            errors.append(
+                f"Row {row_number}: at least option_a and option_b are required"
+            )
             continue
         answer = cell("correct_answer").upper()
         valid = {letter for letter, _ in filled}
         if answer not in valid:
-            errors.append(f"Row {row_number}: correct_answer must be one of {', '.join(sorted(valid))}")
+            errors.append(
+                f"Row {row_number}: correct_answer must be one of {', '.join(sorted(valid))}"
+            )
             continue
         option_texts = [text for _, text in filled]
         if len(set(option_texts)) != len(option_texts):
@@ -157,12 +166,20 @@ def _parse_start(raw: str) -> datetime | None:
     raise ValueError(f"scheduled_start '{raw}' must look like 2026-08-01 09:00")
 
 
-async def bulk_import(db: Session, course_id: int, module_id: int | None, data: bytes) -> dict:
+async def bulk_import(  # noqa: C901 - one pass over the ZIP's sheets, each validated
+    db: Session, course_id: int, module_id: int | None, data: bytes
+) -> dict:
     """exams.csv + thumbnails/ + questions/<folder>/questions.csv + questions/<folder>/images/."""
     zf = safe_zip(data)
-    files = {info.filename.replace("\\", "/").lstrip("/"): info for info in zf.infolist() if not info.is_dir()}
+    files = {
+        info.filename.replace("\\", "/").lstrip("/"): info
+        for info in zf.infolist()
+        if not info.is_dir()
+    }
     # Allow the bundle to sit inside one top-level folder.
-    exams_key = next((k for k in files if _basename(k) == "exams.csv" and k.count("/") <= 1), None)
+    exams_key = next(
+        (k for k in files if _basename(k) == "exams.csv" and k.count("/") <= 1), None
+    )
     if exams_key is None:
         raise ValueError("exams.csv was not found in the ZIP")
     root = exams_key[: -len("exams.csv")]
@@ -181,7 +198,8 @@ async def bulk_import(db: Session, course_id: int, module_id: int | None, data: 
     created_exams = total_questions = skipped = 0
     rows = list(csv.DictReader(io.StringIO(read("exams.csv").decode("utf-8-sig"))))
     for row in rows:
-        def cell(name: str) -> str:
+
+        def cell(name: str, row: dict = row) -> str:
             return (row.get(name) or "").strip()
 
         folder, title = cell("folder"), cell("title")
@@ -193,7 +211,12 @@ async def bulk_import(db: Session, course_id: int, module_id: int | None, data: 
         questions_csv = read(f"questions/{folder}/questions.csv")
         if questions_csv is None:
             skipped += 1
-            errors.append({"exam": label, "message": f"questions/{folder}/questions.csv is missing"})
+            errors.append(
+                {
+                    "exam": label,
+                    "message": f"questions/{folder}/questions.csv is missing",
+                }
+            )
             continue
         try:
             starts = _parse_start(cell("scheduled_start"))
@@ -234,25 +257,31 @@ async def bulk_import(db: Session, course_id: int, module_id: int | None, data: 
         db.add(exam)
         db.flush()
 
-        created, row_errors = import_question_rows(db, exam.id, questions_csv.decode("utf-8-sig"))
+        created, row_errors = import_question_rows(
+            db, exam.id, questions_csv.decode("utf-8-sig")
+        )
         db.flush()
         warnings.extend(row_errors)
         prefix = f"{root}questions/{folder}/images/"
-        images = [(k, zf.read(info)) for k, info in files.items() if k.startswith(prefix)]
+        images = [
+            (k, zf.read(info)) for k, info in files.items() if k.startswith(prefix)
+        ]
         applied, _, image_errors = await apply_question_images(db, exam.id, images)
         warnings.extend(image_errors)
 
         db.commit()
         created_exams += 1
         total_questions += created
-        details.append({
-            "folder": folder,
-            "title": title,
-            "exam_id": str(exam.id),
-            "questions_created": created,
-            "images_applied": applied,
-            "warnings": warnings or None,
-        })
+        details.append(
+            {
+                "folder": folder,
+                "title": title,
+                "exam_id": str(exam.id),
+                "questions_created": created,
+                "images_applied": applied,
+                "warnings": warnings or None,
+            }
+        )
 
     return {
         "created_exams": created_exams,
@@ -279,7 +308,10 @@ def template_zip() -> bytes:
         )
         zf.writestr("questions/exam1/questions.csv", q_csv)
         zf.writestr("questions/exam2/questions.csv", q_csv)
-        zf.writestr("thumbnails/README.txt", "Put exam thumbnails here, named as in the exams.csv 'thumbnail' column.\n")
+        zf.writestr(
+            "thumbnails/README.txt",
+            "Put exam thumbnails here, named as in the exams.csv 'thumbnail' column.\n",
+        )
         zf.writestr(
             "questions/exam1/images/README.txt",
             "Name images {question_number}-{n}.png: n = 0 for the question image, 1 for option A, 2 for B ...\n",

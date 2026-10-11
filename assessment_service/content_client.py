@@ -16,7 +16,11 @@ async def upload_image(data: bytes, filename: str) -> tuple[str, str]:
             files={"file": (filename, data, "application/octet-stream")},
         )
     if r.status_code != 200:
-        detail = r.json().get("detail", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
+        detail = (
+            r.json().get("detail", {})
+            if r.headers.get("content-type", "").startswith("application/json")
+            else {}
+        )
         raise ValueError(detail.get("message") or f"upload failed ({r.status_code})")
     body = r.json()
     return body["secure_url"], body["public_id"]

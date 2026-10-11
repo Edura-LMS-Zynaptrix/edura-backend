@@ -9,7 +9,17 @@ module structure, and lesson hierarchy.
 import enum
 
 from database import Base  # shared Base from database.py
-from sqlalchemy import JSON, Boolean, DateTime, Enum, Index, Integer, Numeric, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -219,4 +229,3 @@ class CheckpointQuestion(Base):
     order_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     __table_args__ = (Index("ix_checkpoint_questions_checkpoint_id", "checkpoint_id"),)
-

@@ -35,6 +35,10 @@ async def create_profile_internal(
                 },
             )
         if r.status_code >= 400:
-            logger.error(f"user_service rejected internal profile creation for {user_id}: {r.text}")
+            logger.error(
+                f"user_service rejected internal profile creation for {user_id}: {r.text}"
+            )
     except Exception as e:
-        logger.error(f"Could not reach user_service to create profile for {user_id}: {e}")
+        logger.error(
+            f"Could not reach user_service to create profile for {user_id}: {e}"
+        )

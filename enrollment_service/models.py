@@ -9,7 +9,17 @@ linked to payment via enroll_id).
 import enum
 
 from database import Base  # shared Base from database.py
-from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -93,7 +103,9 @@ class LessonAccess(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("student_id", "module_id", name="uq_lesson_access_student_module"),
+        UniqueConstraint(
+            "student_id", "module_id", name="uq_lesson_access_student_module"
+        ),
     )
 
 
@@ -133,9 +145,12 @@ class ClassEnrollment(Base):
     enrolled_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    expires_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "class_package_id", name="uq_class_enrollment_user_package"),
+    expires_at: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "class_package_id", name="uq_class_enrollment_user_package"
+        ),
+    )

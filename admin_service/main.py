@@ -1,8 +1,8 @@
 import logging
 
+from chat_router import router as chat_router
 from database import Base, engine
 from fastapi import FastAPI
-from chat_router import router as chat_router
 from router import router
 
 logger = logging.getLogger(__name__)
