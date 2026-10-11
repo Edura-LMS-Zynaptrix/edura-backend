@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from content_client import upload_receipt
 from course_client import get_course_price
@@ -36,6 +36,7 @@ from schemas import (
     ReceiptUploadResponse,
     ReceiptVerifyRequest,
 )
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from utils import (
     PAYHERE_CHECKOUT_URL,
@@ -449,6 +450,56 @@ def _get_bank_account_or_404(account_id: int, db: Session) -> BankAccount:
     if not account:
         raise HTTPException(status_code=404, detail={"error": "BANK_ACCOUNT_NOT_FOUND"})
     return account
+
+
+SL_TIME = timezone(timedelta(hours=5, minutes=30))
+
+
+def _sl(moment: datetime) -> datetime:
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).astimezone(SL_TIME)
+
+
+@router.get("/internal/admin-stats")
+def admin_stats_internal(db: Session = Depends(get_db)):
+    """Service-to-service only (blocked at the gateway): revenue figures for the admin dashboard."""
+    # A SUCCESS payment isn't edited after it succeeds, so updated_at is when it completed.
+    # Free enrollments are recorded as 0.00 payments and aren't revenue.
+    paid = (
+        db.query(Payment.amount, Payment.updated_at)
+        .filter(Payment.payment_status == PaymentStatus.SUCCESS, Payment.amount > 0)
+        .all()
+    )
+    months: dict[tuple[int, int], list] = {}
+    for amount, when in paid:
+        local = _sl(when)
+        bucket = months.setdefault((local.year, local.month), [0.0, 0])
+        bucket[0] += float(amount)
+        bucket[1] += 1
+    now = datetime.now(SL_TIME)
+    recent = (
+        db.query(PaymentReceipt.student_id, PaymentReceipt.reviewed_at)
+        .filter(
+            PaymentReceipt.receipt_status == ReceiptStatus.APPROVED,
+            PaymentReceipt.reviewed_at.isnot(None),
+        )
+        .order_by(PaymentReceipt.reviewed_at.desc())
+        .limit(5)
+        .all()
+    )
+    return {
+        "total_revenue": round(sum(float(a) for a, _ in paid), 2),
+        "revenue_this_month": round(months.get((now.year, now.month), [0.0])[0], 2),
+        "pending_bank_slips": db.query(func.count(PaymentReceipt.id))
+        .filter(PaymentReceipt.receipt_status == ReceiptStatus.PENDING)
+        .scalar() or 0,
+        "revenue_by_month": [
+            {"year": y, "month": m, "revenue": round(months[(y, m)][0]), "count": months[(y, m)][1]}
+            for (y, m) in sorted(months)[-12:]
+        ],
+        "recent_verified": [
+            {"student_id": student_id, "verified_at": reviewed.isoformat()} for student_id, reviewed in recent
+        ],
+    }
 
 
 @router.get("/bank-accounts", response_model=list[BankAccountResponse])

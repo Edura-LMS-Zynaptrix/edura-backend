@@ -167,6 +167,7 @@ class SubmissionRanking(BaseModel):
     course_id: int
     exam_title: str
     overall_rank: Optional[int] = None
+    district_rank: Optional[int] = None
 
 
 class BadgeResponse(BaseModel):

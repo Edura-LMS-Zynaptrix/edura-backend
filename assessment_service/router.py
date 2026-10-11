@@ -4,7 +4,7 @@ import json
 import logging
 import random
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from course_client import get_course_instructor_id, get_course_titles
 from database import get_db
@@ -150,17 +150,10 @@ def _time_taken(submission: Submission) -> int:
     return 0
 
 
-def _overall_rank(assessment_id: int, score: float, db: Session) -> int:
-    return (
-        db.query(Submission)
-        .filter(
-            Submission.assessment_id == assessment_id,
-            Submission.status == SubmissionStatus.graded,
-            Submission.score > score,
-        )
-        .count()
-        + 1
-    )
+async def _my_ranks(assessment_id: int, student_id: int, db: Session) -> tuple[int | None, int | None]:
+    """(island, district) place on the exam's leaderboard — the same first-attempt ranking /rankings shows."""
+    mine = next((r for r in await _exam_board(assessment_id, db) if r["student_id"] == student_id), None)
+    return (mine["rank"], mine["district_rank"]) if mine else (None, None)
 
 
 def _get_question_or_404(question_id: int, db: Session) -> Question:
@@ -395,6 +388,58 @@ def course_first_attempts_internal(course_id: int, db: Session = Depends(get_db)
         "attempts": [
             {"student_id": sid, "exam_id": eid, "score_pct": float(sub.score or 0)}
             for (sid, eid), sub in first.items()
+        ],
+    }
+
+
+SL_TIME = timezone(timedelta(hours=5, minutes=30))
+
+
+@router.get("/internal/admin-stats")
+def assessment_admin_stats_internal(db: Session = Depends(get_db)):
+    """Service-to-service only (blocked at the gateway): exam figures for the admin dashboard."""
+    graded = Submission.status == SubmissionStatus.graded
+    months: dict[tuple[int, int], int] = {}
+    for (when,) in db.query(Submission.submitted_at).filter(graded, Submission.submitted_at.isnot(None)):
+        local = (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(SL_TIME)
+        months[(local.year, local.month)] = months.get((local.year, local.month), 0) + 1
+
+    top = (
+        db.query(Submission.assessment_id, func.count(Submission.id), func.avg(Submission.score))
+        .filter(graded)
+        .group_by(Submission.assessment_id)
+        .order_by(func.count(Submission.id).desc())
+        .limit(8)
+        .all()
+    )
+    titles = {
+        a.id: a for a in db.query(Assessment).filter(Assessment.id.in_([row[0] for row in top])).all()
+    } if top else {}
+    recent = db.query(Assessment).order_by(Assessment.created_at.desc(), Assessment.id.desc()).limit(5).all()
+    return {
+        "published_exams": db.query(Assessment).filter(Assessment.is_published.is_(True)).count(),
+        "graded_attempts": db.query(Submission).filter(graded).count(),
+        "attempts_by_month": [
+            {"year": y, "month": m, "count": months[(y, m)]} for (y, m) in sorted(months)[-12:]
+        ],
+        "top_exams": [
+            {
+                "exam_id": exam_id,
+                "title": titles[exam_id].title,
+                "course_id": titles[exam_id].course_id,
+                "attempt_count": count,
+                "avg_score": round(float(avg or 0), 1),
+            }
+            for exam_id, count, avg in top
+            if exam_id in titles
+        ],
+        "recent_exams": [
+            {
+                "title": a.title,
+                "course_id": a.course_id,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in recent
         ],
     }
 
@@ -635,6 +680,8 @@ async def list_my_submissions(
         seen[a_id] = seen.get(a_id, 0) + 1
         attempt_numbers[sub_id] = seen[a_id]
 
+    ranks = {a_id: await _my_ranks(a_id, student_id, db) for a_id in assessments}
+
     items = []
     for sub in submissions:
         assessment = assessments.get(sub.assessment_id)
@@ -656,7 +703,8 @@ async def list_my_submissions(
                 status="submitted",
                 started_at=sub.started_at,
                 submitted_at=sub.submitted_at,
-                overall_rank=_overall_rank(assessment.id, float(sub.score or 0), db),
+                overall_rank=ranks[assessment.id][0],
+                district_rank=ranks[assessment.id][1],
             )
         )
     return items
@@ -697,6 +745,7 @@ async def review_submission(
     answers = _answers_of(submission)
     score = float(submission.score or 0)
     course_titles = await get_course_titles([assessment.course_id])
+    overall_rank, district_rank = await _my_ranks(assessment.id, submission.student_id, db)
     return AttemptReviewResponse(
         attempt_id=submission.id,
         student_id=submission.student_id,
@@ -712,7 +761,8 @@ async def review_submission(
             course_id=assessment.course_id,
             exam_title=assessment.title,
             course_title=course_titles.get(assessment.course_id, ""),
-            overall_rank=_overall_rank(assessment.id, score, db),
+            overall_rank=overall_rank,
+            district_rank=district_rank,
         ),
     )
 
@@ -1401,16 +1451,7 @@ async def submit_assessment(
     if submission.started_at and submission.submitted_at:
         time_taken = int((submission.submitted_at - submission.started_at).total_seconds())
 
-    overall_rank = (
-        db.query(Submission)
-        .filter(
-            Submission.assessment_id == assessment_id,
-            Submission.status == SubmissionStatus.graded,
-            Submission.score > score,
-        )
-        .count()
-        + 1
-    )
+    overall_rank, district_rank = await _my_ranks(assessment_id, student_id, db)
 
     new_badges: list[Badge] = []
     try:
@@ -1434,6 +1475,7 @@ async def submit_assessment(
             course_id=assessment.course_id,
             exam_title=assessment.title,
             overall_rank=overall_rank,
+            district_rank=district_rank,
         ),
     )
 
@@ -1487,16 +1529,7 @@ async def get_my_last_attempt(
     if submission.started_at and submission.submitted_at:
         time_taken = int((submission.submitted_at - submission.started_at).total_seconds())
 
-    overall_rank = (
-        db.query(Submission)
-        .filter(
-            Submission.assessment_id == assessment_id,
-            Submission.status == SubmissionStatus.graded,
-            Submission.score > submission.score,
-        )
-        .count()
-        + 1
-    )
+    overall_rank, district_rank = await _my_ranks(assessment_id, student_id, db)
 
     return SubmitAssessmentResponse(
         session_id="",
@@ -1512,6 +1545,7 @@ async def get_my_last_attempt(
             course_id=assessment.course_id,
             exam_title=assessment.title,
             overall_rank=overall_rank,
+            district_rank=district_rank,
         ),
     )
 

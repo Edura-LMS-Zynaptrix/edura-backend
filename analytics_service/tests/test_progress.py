@@ -229,3 +229,91 @@ def test_struggle_route(client, monkeypatch):
     assert r.status_code == 200 and r.json()["overall_failure_rate"] == 100.0
     assert client.get("/courses/404/struggle", headers=ADMIN).status_code == 404
 
+
+
+# ---------------------------------------------------------------------------
+# Admin dashboard and analytics page
+# ---------------------------------------------------------------------------
+
+import dashboard  # noqa: E402
+
+SOURCES = {
+    "users": {
+        "total_students": 3,
+        "by_grade": [{"grade": 10, "count": 1}, {"grade": 11, "count": 2}],
+        "by_district": [{"district": "Colombo", "count": 2}],
+        "recent_students": [
+            {"user_id": 7, "full_name": "Nimal", "district": "Colombo", "created_at": "2026-10-05T10:00:00+00:00"},
+            {"user_id": 8, "full_name": "Kamal", "district": None, "created_at": "2026-10-01T10:00:00"},
+        ],
+    },
+    "courses": [{"id": 10, "title": "Mathematics", "grade": 11}],
+    "enrollments": [{"course_id": 10, "count": 4}, {"course_id": 20, "count": 2}, {"course_id": 99, "count": 5}],
+    "assessments": {
+        "published_exams": 2,
+        "graded_attempts": 9,
+        "attempts_by_month": [{"year": 2026, "month": 10, "count": 9}],
+        "top_exams": [{"exam_id": 1, "title": "Algebra", "course_id": 20, "attempt_count": 9, "avg_score": 61.5}],
+        "recent_exams": [{"title": "Algebra", "course_id": 20, "created_at": "2026-10-03T08:00:00+05:30"}],
+    },
+    "payments": {
+        "total_revenue": 5000.0,
+        "revenue_this_month": 1500.0,
+        "pending_bank_slips": 1,
+        "revenue_by_month": [{"year": 2026, "month": 10, "revenue": 1500, "count": 1}],
+        "recent_verified": [{"student_id": 7, "verified_at": "2026-10-04T09:00:00+00:00"}],
+    },
+}
+
+
+def test_dashboard_stats_and_activity_newest_first():
+    stats = dashboard.build_stats(SOURCES, {7: "Nimal"}, {20: "Biology"})
+    assert {k: stats[k] for k in ("total_students", "total_courses", "total_exams", "total_exam_attempts",
+                                  "total_revenue", "revenue_this_month", "pending_bank_slips")} == {
+        "total_students": 3, "total_courses": 1, "total_exams": 2, "total_exam_attempts": 9,
+        "total_revenue": 5000.0, "revenue_this_month": 1500.0, "pending_bank_slips": 1,
+    }
+    assert [(a["type"], a["subtitle"]) for a in stats["recent_activity"]] == [
+        ("student", "Nimal joined from Colombo"),
+        ("payment", "Bank slip verified for Nimal"),
+        ("exam", "Algebra — Biology"),
+        ("student", "Kamal joined"),  # naive timestamps are read as UTC
+    ]
+
+
+def test_analytics_names_courses_and_skips_deleted_ones():
+    courses = {10: {"id": 10, "title": "Mathematics", "grade": 11}, 20: {"id": 20, "title": "Biology", "grade": 10}}
+    data = dashboard.build_analytics(SOURCES, courses)
+    assert data["top_exams"] == [{"exam_id": "1", "title": "Algebra", "subject": "Biology", "grade": 10,
+                                  "attempt_count": 9, "avg_score": 61.5}]
+    assert data["enrollments_by_subject"] == [{"subject": "Mathematics", "count": 4}, {"subject": "Biology", "count": 2}]
+    assert data["students_by_grade"] == SOURCES["users"]["by_grade"]
+    assert data["revenue_by_month"] == SOURCES["payments"]["revenue_by_month"]
+
+
+def test_admin_routes(client, monkeypatch):
+    async def sources():
+        return SOURCES
+
+    async def names(ids):
+        return {7: "Nimal"}
+
+    async def course_info(course_id):
+        return {"id": 20, "title": "Biology", "grade": 10} if course_id == 20 else None
+
+    monkeypatch.setattr(service_clients, "admin_sources", sources)
+    monkeypatch.setattr(service_clients, "names", names)
+    monkeypatch.setattr(service_clients, "course_info", course_info)
+
+    assert client.get("/admin/stats", headers=STUDENT).status_code == 403
+    assert client.get("/admin/analytics").status_code == 401
+    stats = client.get("/admin/stats", headers=ADMIN)
+    assert stats.status_code == 200 and stats.json()["recent_activity"][2]["subtitle"] == "Algebra — Biology"
+    analytics = client.get("/admin/analytics", headers=ADMIN).json()
+    assert [r["subject"] for r in analytics["enrollments_by_subject"]] == ["Mathematics", "Biology"]
+
+    async def down():
+        raise service_clients.SourceUnavailable("payment")
+
+    monkeypatch.setattr(service_clients, "admin_sources", down)
+    assert client.get("/admin/stats", headers=ADMIN).status_code == 503

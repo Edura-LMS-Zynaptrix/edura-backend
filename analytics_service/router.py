@@ -4,6 +4,7 @@ import logging
 import os
 import re
 
+import dashboard
 import progress
 import redis
 from events import publish_event
@@ -22,6 +23,7 @@ _STATS_CACHE_KEY = "analytics:platform-stats"
 _STATS_TTL_SECONDS = 300
 _SUMMARY_CACHE_KEY = "analytics:progress-summary"
 _SUMMARY_TTL_SECONDS = 60
+_ADMIN_TTL_SECONDS = 30
 
 try:
     _redis = redis.Redis(
@@ -176,3 +178,30 @@ async def course_struggle(course_id: int, _: dict = Depends(require_role(["admin
     if data is None:
         raise HTTPException(status_code=404, detail={"error": "COURSE_NOT_FOUND"})
     return data
+
+
+# ---------------------------------------------------------------------------
+# Admin dashboard and analytics page
+# ---------------------------------------------------------------------------
+
+
+async def _admin_view(key: str, build):
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    try:
+        view = await build()
+    except SourceUnavailable as e:
+        raise _unavailable(e)
+    _cache_set(view, key, _ADMIN_TTL_SECONDS)
+    return view
+
+
+@router.get("/admin/stats")
+async def admin_stats(_: dict = Depends(require_role(["admin"]))):
+    return await _admin_view("analytics:admin-stats", dashboard.admin_stats)
+
+
+@router.get("/admin/analytics")
+async def admin_analytics(_: dict = Depends(require_role(["admin"]))):
+    return await _admin_view("analytics:admin-analytics", dashboard.admin_analytics)

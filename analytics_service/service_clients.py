@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -10,6 +11,7 @@ USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:8002")
 COURSE_SERVICE_URL = os.getenv("COURSE_SERVICE_URL", "http://course_service:8003")
 ENROLLMENT_SERVICE_URL = os.getenv("ENROLLMENT_SERVICE_URL", "http://enrollment_service:8005")
 ASSESSMENT_SERVICE_URL = os.getenv("ASSESSMENT_SERVICE_URL", "http://assessment_service:8007")
+PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment_service:8006")
 
 # The serverless database behind the services can take several seconds to wake.
 _TIMEOUT = 10.0
@@ -116,3 +118,33 @@ async def course_modules(course_id: int) -> list[dict] | None:
 async def first_attempts(course_id: int) -> dict:
     data = await _required(f"{ASSESSMENT_SERVICE_URL}/internal/courses/{course_id}/first-attempts")
     return data or {"exams": [], "attempts": []}
+
+
+async def names(user_ids) -> dict[int, str]:
+    if not user_ids:
+        return {}
+    data = await _required(f"{USER_SERVICE_URL}/internal/names", {"ids": _ids(user_ids)})
+    return {int(k): v for k, v in (data or {}).items()}
+
+
+async def course_info(course_id: int) -> dict | None:
+    return await _required(f"{COURSE_SERVICE_URL}/internal/courses/{course_id}")
+
+
+async def admin_sources() -> dict:
+    """Everything the admin dashboard and analytics page are built from, fetched together."""
+    users, courses, enrollments, assessments, payments = await asyncio.gather(
+        _required(f"{USER_SERVICE_URL}/internal/student-breakdown"),
+        _required(f"{COURSE_SERVICE_URL}/internal/published"),
+        _required(f"{ENROLLMENT_SERVICE_URL}/internal/course-counts"),
+        _required(f"{ASSESSMENT_SERVICE_URL}/internal/admin-stats"),
+        _required(f"{PAYMENT_SERVICE_URL}/internal/admin-stats"),
+    )
+    return {
+        "users": users or {},
+        "courses": courses or [],
+        "enrollments": enrollments or [],
+        "assessments": assessments or {},
+        "payments": payments or {},
+    }
+

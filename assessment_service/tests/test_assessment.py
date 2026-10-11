@@ -66,6 +66,16 @@ def isolated_redis():
 
 
 @pytest.fixture(autouse=True)
+def students_by_default():
+    # user_service is a separate service: every id is a student unless a test says otherwise.
+    def profiles(ids):
+        return {i: {"user_id": i, "role": "student", "full_name": f"Student {i}", "district": ""} for i in ids}
+
+    with patch("router.get_profiles", new=AsyncMock(side_effect=profiles)):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def enrolled_by_default():
     # enrollment_service is a separate service; individual tests override this.
     with patch("router.is_enrolled", new=AsyncMock(return_value=True)):
@@ -549,3 +559,30 @@ def test_my_exam_rank(ranked_attempts):
     stranger = client.get("/rankings/exam/1", headers={"Authorization": f"Bearer {create_token(555)}"}).json()
     assert stranger["overall_rank"] is None
     assert client.get("/rankings/exam/1").status_code == 401
+
+
+def test_result_rank_matches_leaderboard_and_ignores_retakes(ranked_attempts):
+    # 203 first scored 60 (3rd); a perfect retake now must not lift that rank.
+    headers = {"Authorization": f"Bearer {create_token(203)}"}
+    with patch("router.publish_assessment_graded"):
+        start = client.post("/api/assessments/1/start", headers=headers).json()
+        result = client.post(
+            "/api/assessments/1/submit",
+            json={
+                "session_id": start["session_id"],
+                "answers": [
+                    {"question_id": 1, "selected_option": "def"},
+                    {"question_id": 2, "selected_option": "False"},
+                ],
+            },
+            headers=headers,
+        ).json()
+    assert result["score"] == 100
+    assert (result["ranking"]["overall_rank"], result["ranking"]["district_rank"]) == (3, 2)
+
+    attempts = client.get("/my-submissions", headers=headers).json()
+    assert {(a["overall_rank"], a["district_rank"]) for a in attempts} == {(3, 2)}
+    last = client.get("/1/my-last-attempt", headers=headers).json()
+    assert last["ranking"]["overall_rank"] == 3
+    review = client.get(f"/submissions/{attempts[0]['attempt_id']}/review", headers=headers).json()
+    assert (review["ranking"]["overall_rank"], review["ranking"]["district_rank"]) == (3, 2)

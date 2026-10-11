@@ -25,6 +25,7 @@ from referrals import apply_code as apply_referral_code
 from referrals import bind_referral, find_referrer
 from referrals import events_for as referral_events_for
 from referrals import summary as referral_summary_of
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from shared.auth import require_role
@@ -467,6 +468,48 @@ async def profile_names_internal(
         .all()
     )
     return {str(uid): f"{first} {last}".strip() for uid, first, last in rows}
+
+
+@router.get("/internal/student-breakdown")
+def student_breakdown_internal(db: Session = Depends(get_db)):
+    """Service-to-service only (blocked at the gateway): student counts for the admin dashboard."""
+    is_student = UserProfile.role == ProfileRole.student
+    by_grade = (
+        db.query(UserProfile.grade, func.count(UserProfile.id))
+        .filter(is_student, UserProfile.grade.isnot(None))
+        .group_by(UserProfile.grade)
+        .order_by(UserProfile.grade)
+        .all()
+    )
+    by_district = (
+        db.query(UserProfile.district, func.count(UserProfile.id))
+        .filter(is_student, UserProfile.district.isnot(None), UserProfile.district != "")
+        .group_by(UserProfile.district)
+        .order_by(func.count(UserProfile.id).desc(), UserProfile.district)
+        .limit(10)
+        .all()
+    )
+    recent = (
+        db.query(UserProfile)
+        .filter(is_student)
+        .order_by(UserProfile.created_at.desc(), UserProfile.id.desc())
+        .limit(5)
+        .all()
+    )
+    return {
+        "total_students": db.query(func.count(UserProfile.id)).filter(is_student).scalar() or 0,
+        "by_grade": [{"grade": g, "count": c} for g, c in by_grade],
+        "by_district": [{"district": d, "count": c} for d, c in by_district],
+        "recent_students": [
+            {
+                "user_id": p.user_id,
+                "full_name": f"{p.first_name} {p.last_name}".strip(),
+                "district": p.district,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in recent
+        ],
+    }
 
 
 @router.get("/internal/stats", response_model=RoleStatsResponse)
