@@ -185,6 +185,8 @@ class GoogleAuthService:
                 "email": email,
                 "full_name": data.get("name", ""),
                 "picture": data.get("picture", ""),
+                # Google only reports an address it has confirmed as verified.
+                "email_verified": bool(data.get("email_verified", False)),
             }
         except (urllib.error.HTTPError, urllib.error.URLError, Exception):
             return None
@@ -238,6 +240,53 @@ class PasswordResetService:
         return secrets.compare_digest(
             PasswordResetService._fingerprint(hashed_password), fingerprint
         )
+
+
+class EmailVerificationService:
+    """
+    Stateless verification links: a signed JWT carrying the address it was sent
+    to. Using the link twice is harmless (the account is simply already
+    verified), and a token minted for one purpose is rejected for the others.
+    """
+
+    PURPOSE = "email_verification"
+
+    @staticmethod
+    def create_token(user_id: int, email: str) -> str:
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": str(user_id),
+            "purpose": EmailVerificationService.PURPOSE,
+            "email": email,
+            "iat": now,
+            "exp": now + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
+        }
+        return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+    @staticmethod
+    def read_token(token: str) -> Optional[Tuple[int, str]]:
+        """Returns (user_id, email) or None when invalid or expired."""
+        try:
+            data = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
+        except jwt.PyJWTError:
+            return None
+        if data.get("purpose") != EmailVerificationService.PURPOSE:
+            return None
+        try:
+            return int(data["sub"]), str(data["email"])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def may_resend(user_id: int) -> bool:
+        """True (and starts the wait) unless a link was requested a moment ago."""
+        key = f"email_verification_sent:{user_id}"
+        if redis_client.get(key):
+            return False
+        redis_client.set(key, "1", ex=settings.EMAIL_VERIFICATION_RESEND_SECONDS)
+        return True
 
 
 class SessionService:

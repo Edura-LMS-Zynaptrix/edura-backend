@@ -59,6 +59,15 @@ def process_message(  # noqa: C901 - one branch per event type
                 "otp_code": data.get("otp_code", "000000"),
                 "expires_in_minutes": data.get("expires_in_minutes", 5),
             }
+        elif routing_key == "auth.email-verification-requested":
+            subject = "Verify your Edura email address"
+            template_name = "email_verification.html"
+            event_type = NotificationEvent.email_verification_requested
+            minutes = int(data.get("expires_in_minutes", 1440))
+            context = {
+                "verify_url": data.get("verify_url", "#"),
+                "expires_in_hours": max(1, round(minutes / 60)),
+            }
         elif routing_key == "auth.password-reset-requested":
             subject = "Reset your Edura password"
             template_name = "password_reset.html"
@@ -204,6 +213,7 @@ def start_consumer():
 
             binding_keys = [
                 "auth.otp-requested",
+                "auth.email-verification-requested",
                 "auth.password-reset-requested",
                 "auth.password-changed",
                 "report.progress",
@@ -242,6 +252,7 @@ def prepare_database():
     statements = (
         "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'password_reset_requested'",
         "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'password_changed'",
+        "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'email_verification_requested'",
         "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'progress_report'",
     )
     try:

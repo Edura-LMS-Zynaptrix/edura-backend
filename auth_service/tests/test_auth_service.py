@@ -39,6 +39,38 @@ app.dependency_overrides[get_db] = override_get_db
 
 client = TestClient(app)
 
+PUBLISHED: list = []
+
+
+@pytest.fixture(autouse=True)
+def capture_events(monkeypatch):
+    """Nothing in these tests talks to RabbitMQ; events are recorded instead."""
+    PUBLISHED.clear()
+    monkeypatch.setattr(
+        "router.publish_event", lambda key, payload: PUBLISHED.append((key, payload))
+    )
+
+
+def _verification_token() -> str:
+    key, payload = next(
+        e for e in reversed(PUBLISHED) if e[0].endswith("verification-requested")
+    )
+    return payload["verify_url"].split("token=", 1)[1]
+
+
+def _register_verified(
+    email: str, password: str = "Password@123", role: str = "student"
+):
+    """Sign up the way a person does: register, then follow the emailed link."""
+    resp = client.post(
+        "/register", json={"email": email, "password": password, "role": role}
+    )
+    assert resp.status_code == 200
+    assert (
+        client.post("/verify-email", json={"token": _verification_token()}).status_code
+        == 200
+    )
+
 
 @pytest.fixture(autouse=True, scope="module")
 def setup_db():
@@ -93,6 +125,19 @@ def test_register_and_login_success():
     assert reg_resp.status_code == 200
     data = reg_resp.json()
     assert data["email"] == "student@edura.com"
+    assert data["is_email_verified"] is False
+
+    # Login is refused until the emailed link has been followed
+    blocked = client.post(
+        "/login",
+        json={"email": "student@edura.com", "password": "Password@123"},
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["error"] == "EMAIL_NOT_VERIFIED"
+    assert (
+        client.post("/verify-email", json={"token": _verification_token()}).status_code
+        == 200
+    )
 
     # Login user
     login_resp = client.post(
@@ -126,10 +171,7 @@ def test_login_invalid_credentials():
 
 def test_refresh_token_rotation_and_reuse():
     # Register & Login
-    client.post(
-        "/register",
-        json={"email": "admin@edura.com", "password": "Password@123", "role": "admin"},
-    )
+    _register_verified("admin@edura.com", role="admin")
     login_resp = client.post(
         "/login",
         json={"email": "admin@edura.com", "password": "Password@123"},
@@ -150,10 +192,7 @@ def test_refresh_token_rotation_and_reuse():
 
 def test_protected_route_role_enforcement():
     # Register Student
-    client.post(
-        "/register",
-        json={"email": "user@edura.com", "password": "Password@123", "role": "student"},
-    )
+    _register_verified("user@edura.com")
     login_resp = client.post(
         "/login",
         json={"email": "user@edura.com", "password": "Password@123"},
@@ -214,7 +253,7 @@ def test_forgot_password_does_not_reveal_unknown_emails():
 
 def test_reset_password_flow_is_single_use_and_signs_out():
     email = "reset@edura.com"
-    client.post("/register", json={"email": email, "password": "Password@123"})
+    _register_verified(email)
     old_refresh = client.post(
         "/login", json={"email": email, "password": "Password@123"}
     ).cookies["refresh_token"]
@@ -288,7 +327,7 @@ def test_reset_password_rejects_garbage_token():
 
 def test_logout_revokes_refresh_token():
     email = "logout@edura.com"
-    client.post("/register", json={"email": email, "password": "Password@123"})
+    _register_verified(email)
     refresh = client.post(
         "/login", json={"email": email, "password": "Password@123"}
     ).cookies["refresh_token"]
@@ -299,3 +338,241 @@ def test_logout_revokes_refresh_token():
 
     assert resp.status_code == 200
     assert client.post("/refresh", json={"refresh_token": refresh}).status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Email verification
+# ---------------------------------------------------------------------------
+
+
+def test_register_sends_a_verification_link():
+    resp = client.post(
+        "/register", json={"email": "newbie@edura.com", "password": "Password@123"}
+    )
+    assert resp.status_code == 200
+
+    key, payload = PUBLISHED[-1]
+    assert key == "auth.email-verification-requested"
+    assert payload["email"] == "newbie@edura.com"
+    assert "/verify-email?token=" in payload["verify_url"]
+    assert payload["expires_in_minutes"] == 1440
+
+
+def test_unverified_login_hides_whether_the_address_exists():
+    client.post(
+        "/register", json={"email": "probe@edura.com", "password": "Password@123"}
+    )
+
+    wrong = client.post(
+        "/login", json={"email": "probe@edura.com", "password": "Wrong@123"}
+    )
+    unknown = client.post(
+        "/login", json={"email": "ghost@edura.com", "password": "Wrong@123"}
+    )
+    # Without the right password the answer is the same as for an unknown address
+    assert wrong.status_code == unknown.status_code == 401
+    assert wrong.json()["detail"]["error"] == "INVALID_CREDENTIALS"
+
+
+def test_verification_link_is_reusable_but_only_for_verification():
+    client.post(
+        "/register", json={"email": "twice@edura.com", "password": "Password@123"}
+    )
+    token = _verification_token()
+    assert client.post("/verify-email", json={"token": token}).status_code == 200
+    assert (
+        client.post("/verify-email", json={"token": token}).status_code == 200
+    )  # harmless
+
+    invalid = client.post("/verify-email", json={"token": "not-a-token"})
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"]["error"] == "INVALID_VERIFICATION_TOKEN"
+
+    # a password-reset link, or a login token, can't be used to verify an address
+    from services import PasswordResetService
+
+    reset = PasswordResetService.create_token(1, "hash")
+    assert client.post("/verify-email", json={"token": reset}).status_code == 400
+    login = TokenService.create_access_token(user_id=1, role="STUDENT")
+    assert client.post("/verify-email", json={"token": login}).status_code == 400
+
+
+def test_expired_verification_link_is_rejected(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config.settings, "EMAIL_VERIFICATION_EXPIRE_MINUTES", -1)
+    client.post(
+        "/register", json={"email": "late@edura.com", "password": "Password@123"}
+    )
+    assert (
+        client.post("/verify-email", json={"token": _verification_token()}).status_code
+        == 400
+    )
+
+
+def test_resend_verification(monkeypatch):
+    from services import MemoryRedisClient
+
+    monkeypatch.setattr("services.redis_client", MemoryRedisClient())
+    client.post(
+        "/register", json={"email": "resend@edura.com", "password": "Password@123"}
+    )
+    PUBLISHED.clear()
+
+    first = client.post("/resend-verification", json={"email": "resend@edura.com"})
+    assert first.status_code == 200
+    assert (
+        len(PUBLISHED) == 1 and PUBLISHED[0][0] == "auth.email-verification-requested"
+    )
+
+    # a second request straight away is answered the same but sends nothing
+    again = client.post("/resend-verification", json={"email": "resend@edura.com"})
+    unknown = client.post("/resend-verification", json={"email": "nobody@edura.com"})
+    assert again.json() == first.json() == unknown.json()
+    assert len(PUBLISHED) == 1
+
+    # nothing is sent once the account is verified
+    assert (
+        client.post("/verify-email", json={"token": _verification_token()}).status_code
+        == 200
+    )
+    monkeypatch.setattr("services.redis_client", MemoryRedisClient())
+    client.post("/resend-verification", json={"email": "resend@edura.com"})
+    assert len(PUBLISHED) == 1
+
+
+def test_register_with_profile_creates_both(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    create = AsyncMock(return_value=(True, 201, {}))
+    monkeypatch.setattr("router.create_registration_profile", create)
+    resp = client.post(
+        "/register",
+        json={
+            "email": "full@edura.com",
+            "password": "Password@123",
+            "profile": {
+                "first_name": "Nimal",
+                "last_name": "Perera",
+                "grade": 11,
+                "school": "Royal",
+            },
+        },
+    )
+    assert resp.status_code == 200
+    user_id, role, profile = create.call_args.args
+    assert user_id == resp.json()["id"] and role == "student"
+    assert profile == {
+        "first_name": "Nimal",
+        "last_name": "Perera",
+        "grade": 11,
+        "school": "Royal",
+    }
+    assert PUBLISHED[-1][0] == "auth.email-verification-requested"
+
+
+def test_register_rolls_back_when_the_profile_is_refused(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    body = {
+        "email": "rollback@edura.com",
+        "password": "Password@123",
+        "profile": {"first_name": "A"},
+    }
+    monkeypatch.setattr(
+        "router.create_registration_profile",
+        AsyncMock(return_value=(False, 422, "bad phone")),
+    )
+    rejected = client.post("/register", json=body)
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["error"] == "PROFILE_REJECTED"
+    assert not [e for e in PUBLISHED if e[1].get("email") == "rollback@edura.com"]
+
+    removed = AsyncMock()
+    monkeypatch.setattr("router.delete_profile_internal", removed)
+    monkeypatch.setattr(
+        "router.create_registration_profile",
+        AsyncMock(return_value=(False, 503, "down")),
+    )
+    assert client.post("/register", json=body).status_code == 502
+    # a profile may have been saved even though the reply was lost: it is removed too
+    removed.assert_awaited_once()
+
+    # the failed attempts left nothing behind, so the address can still be used
+    monkeypatch.setattr(
+        "router.create_registration_profile", AsyncMock(return_value=(True, 201, {}))
+    )
+    assert client.post("/register", json=body).status_code == 200
+
+
+def test_google_sign_in_verifies_and_drops_an_unverified_password(monkeypatch):
+    client.post(
+        "/register", json={"email": "hijack@edura.com", "password": "Attacker@123"}
+    )
+    info = {
+        "google_id": "g-123",
+        "email": "hijack@edura.com",
+        "full_name": "Real Owner",
+        "picture": "",
+        "email_verified": True,
+    }
+    monkeypatch.setattr(
+        "router.GoogleAuthService.verify_access_token", lambda token: info
+    )
+    assert client.post("/google", json={"access_token": "x"}).status_code == 200
+
+    # the password typed in by whoever registered first no longer works
+    login = client.post(
+        "/login", json={"email": "hijack@edura.com", "password": "Attacker@123"}
+    )
+    assert (
+        login.status_code == 400
+        and login.json()["detail"]["error"] == "GOOGLE_ONLY_ACCOUNT"
+    )
+
+
+def test_google_without_a_verified_address_does_not_verify(monkeypatch):
+    client.post(
+        "/register", json={"email": "unsure@edura.com", "password": "Password@123"}
+    )
+    info = {
+        "google_id": "g-456",
+        "email": "unsure@edura.com",
+        "full_name": "",
+        "picture": "",
+        "email_verified": False,
+    }
+    monkeypatch.setattr(
+        "router.GoogleAuthService.verify_access_token", lambda token: info
+    )
+    client.post("/google", json={"access_token": "x"})
+    login = client.post(
+        "/login", json={"email": "unsure@edura.com", "password": "Password@123"}
+    )
+    assert (
+        login.status_code == 403
+        and login.json()["detail"]["error"] == "EMAIL_NOT_VERIFIED"
+    )
+
+
+def test_password_reset_proves_the_address():
+    client.post(
+        "/register", json={"email": "stuck@edura.com", "password": "Password@123"}
+    )
+    _, published = _request_reset("stuck@edura.com")
+    token = published.call_args.args[1]["reset_url"].split("token=", 1)[1]
+    done = client.post(
+        "/reset-password",
+        json={
+            "token": token,
+            "new_password": "NewPass@456",
+            "confirm_password": "NewPass@456",
+        },
+    )
+    assert done.status_code == 200
+    assert (
+        client.post(
+            "/login", json={"email": "stuck@edura.com", "password": "NewPass@456"}
+        ).status_code
+        == 200
+    )

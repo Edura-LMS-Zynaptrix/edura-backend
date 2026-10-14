@@ -150,12 +150,11 @@ class PaginatedUsersResponse(BaseModel):
     items: list[UserProfileResponse]
 
 
-class InternalProfileCreateRequest(BaseModel):
+class InternalProfileCreateRequest(UserProfileCreate):
+    """Everything a self-service profile has, plus who it belongs to (sent by auth_service)."""
+
     user_id: int
     role: str
-    first_name: str
-    last_name: str
-    avatar_url: Optional[str] = None
 
 
 class RoleStatsResponse(BaseModel):

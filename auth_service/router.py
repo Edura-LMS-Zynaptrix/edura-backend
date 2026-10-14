@@ -15,14 +15,17 @@ from schemas import (
     OtpRequest,
     OtpVerifyRequest,
     RefreshRequest,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     SetPasswordRequest,
     TokenResponse,
     UserRegisterRequest,
     UserResponse,
     UserStatusUpdateRequest,
+    VerifyEmailRequest,
 )
 from services import (
+    EmailVerificationService,
     GoogleAuthService,
     OtpService,
     PasswordResetService,
@@ -30,7 +33,11 @@ from services import (
     TokenService,
 )
 from sqlalchemy.orm import Session
-from user_client import create_profile_internal
+from user_client import (
+    create_profile_internal,
+    create_registration_profile,
+    delete_profile_internal,
+)
 
 from shared.auth import require_role
 
@@ -50,8 +57,21 @@ def admin_only(payload: dict = Depends(require_role(["admin"]))):
     return {"message": "Welcome Admin", "user_id": payload.get("sub")}
 
 
+def _send_verification_email(user: User) -> None:
+    token = EmailVerificationService.create_token(user.id, user.email)
+    publish_event(
+        "auth.email-verification-requested",
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "verify_url": f"{settings.FRONTEND_URL.rstrip('/')}/verify-email?token={token}",
+            "expires_in_minutes": settings.EMAIL_VERIFICATION_EXPIRE_MINUTES,
+        },
+    )
+
+
 @router.post("/register", response_model=UserResponse)
-def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
+async def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == req.email).first()
     if existing:
         raise HTTPException(
@@ -78,7 +98,75 @@ def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    if req.profile:
+        # The account and its profile are created together. If the profile is
+        # refused, the account is removed so the email can be used again.
+        ok, status_code, detail = await create_registration_profile(
+            user.id,
+            role.value if isinstance(role, UserRole) else str(role),
+            req.profile.model_dump(exclude_none=True),
+        )
+        if not ok:
+            if status_code != 422:
+                # The reply may have been lost after the profile was saved.
+                await delete_profile_internal(user.id)
+            db.delete(user)
+            db.commit()
+            raise HTTPException(
+                status_code=422 if status_code == 422 else 502,
+                detail={
+                    "error": (
+                        "PROFILE_REJECTED"
+                        if status_code == 422
+                        else "PROFILE_SERVICE_UNAVAILABLE"
+                    ),
+                    "message": (
+                        "Please check your details and try again."
+                        if status_code == 422
+                        else "We could not finish creating your account. Please try again shortly."
+                    ),
+                    "details": detail if status_code == 422 else None,
+                },
+            )
+
+    _send_verification_email(user)
     return user
+
+
+@router.post("/verify-email")
+def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
+    """Marks the account behind a verification link as verified."""
+    parsed = EmailVerificationService.read_token(req.token)
+    user = db.query(User).filter(User.id == parsed[0]).first() if parsed else None
+    # The link is only good for the address it was sent to.
+    if not user or user.email != parsed[1]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "INVALID_VERIFICATION_TOKEN",
+                "message": "This verification link is invalid or has expired. Request a new one.",
+            },
+        )
+    if not user.is_email_verified:
+        user.is_email_verified = True
+        db.commit()
+    return {"message": "Email verified. You can now log in."}
+
+
+@router.post("/resend-verification")
+def resend_verification(req: ResendVerificationRequest, db: Session = Depends(get_db)):
+    """Sends a fresh link. Same answer for every address, so accounts can't be probed."""
+    user = db.query(User).filter(User.email == req.email).first()
+    if (
+        user
+        and user.is_active
+        and user.hashed_password
+        and not user.is_email_verified
+        and EmailVerificationService.may_resend(user.id)
+    ):
+        _send_verification_email(user)
+    return {"message": _VERIFICATION_REQUESTED_MESSAGE}
 
 
 @router.get("/internal/users", response_model=list[InternalUserResponse])
@@ -222,6 +310,17 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
             },
         )
 
+    # Checked only after the password is right, so it can't be used to learn
+    # which addresses are registered.
+    if not user.is_email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "EMAIL_NOT_VERIFIED",
+                "message": "Please verify your email address before signing in. Check your inbox for the verification link.",
+            },
+        )
+
     role_str = user.role.value if isinstance(user.role, UserRole) else str(user.role)
     access_token = TokenService.create_access_token(user.id, role_str, user.email)
     refresh_token = TokenService.create_refresh_token(db, user.id)
@@ -322,6 +421,13 @@ async def google_login(
             user.google_id = google_id
             if not user.hashed_password:
                 user.auth_provider = "google"
+        if google_info.get("email_verified") and not user.is_email_verified:
+            # Google has confirmed this address belongs to the person signing in.
+            # A password on a never-verified account was chosen by whoever typed
+            # the address in first, who may not be the owner: remove it.
+            user.is_email_verified = True
+            user.hashed_password = None
+            user.auth_provider = "google"
         db.commit()
     else:
         user = User(
@@ -458,6 +564,7 @@ def change_password(
     return {"message": "Password updated successfully"}
 
 
+_VERIFICATION_REQUESTED_MESSAGE = "If that address has an account waiting to be verified, a new verification link is on its way."
 _RESET_REQUESTED_MESSAGE = (
     "If an account with that email exists, a password reset link has been sent."
 )
@@ -506,6 +613,8 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     user.hashed_password = bcrypt.hashpw(
         req.new_password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
+    # Following the emailed link shows the person controls this address.
+    user.is_email_verified = True
     db.commit()
 
     # Anyone holding an old session is signed out.

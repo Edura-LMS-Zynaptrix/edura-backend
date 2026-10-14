@@ -41,6 +41,7 @@ class NotificationEvent(str, enum.Enum):
     otp_requested = "otp_requested"
     password_reset_requested = "password_reset_requested"
     password_changed = "password_changed"
+    email_verification_requested = "email_verification_requested"
     progress_report = "progress_report"
     proctoring_violation = "proctoring_violation"
     general = "general"

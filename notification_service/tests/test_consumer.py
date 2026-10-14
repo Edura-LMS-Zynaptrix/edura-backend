@@ -252,7 +252,7 @@ def test_start_consumer():
         mock_pika_conn.assert_called_once()
         mock_channel.exchange_declare.assert_called_once()
         mock_channel.queue_declare.assert_called_once()
-        assert mock_channel.queue_bind.call_count == 8
+        assert mock_channel.queue_bind.call_count == 9
         mock_channel.start_consuming.assert_called_once()
 
 
@@ -299,5 +299,43 @@ def test_process_progress_report_attaches_pdf():
         assert (
             "%PDF" not in log.body
         )  # the log keeps the email body, not the attachment
+    finally:
+        db.close()
+
+
+def test_process_email_verification_sends_the_link():
+    mock_ch = MagicMock()
+    mock_method = MagicMock()
+    mock_method.delivery_tag = 11
+    mock_method.routing_key = "auth.email-verification-requested"
+
+    body = json.dumps(
+        {
+            "user_id": 61,
+            "email": "newbie@example.com",
+            "verify_url": "http://localhost:3000/verify-email?token=abc.def.ghi",
+            "expires_in_minutes": 1440,
+        }
+    )
+
+    with patch("consumer.send_email") as mock_send:
+        process_message(mock_ch, mock_method, None, body)
+
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs["to_email"] == "newbie@example.com"
+        assert kwargs["subject"] == "Verify your Edura email address"
+        assert "verify-email?token=abc.def.ghi" in kwargs["html_body"]
+        assert "24 hours" in kwargs["html_body"]
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=11)
+
+    db = TestingSessionLocal()
+    try:
+        log = (
+            db.query(NotificationLog)
+            .filter_by(recipient_email="newbie@example.com")
+            .first()
+        )
+        assert log.event_type == NotificationEvent.email_verification_requested
+        assert log.status == NotificationStatus.sent
     finally:
         db.close()

@@ -49,10 +49,26 @@ class OtpVerifyRequest(BaseModel):
     purpose: OtpPurpose = OtpPurpose.email_verify
 
 
+class RegistrationProfile(BaseModel):
+    """Profile details collected on the sign-up form; stored by user_service."""
+
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(default="", max_length=100)
+    mobile_no: Optional[str] = None
+    school: Optional[str] = Field(default=None, max_length=200)
+    district: Optional[str] = None
+    grade: Optional[int] = Field(default=None, ge=5, le=13)
+    stream_id: Optional[int] = None
+    nic_number: Optional[str] = None
+    selected_subjects: Optional[list[str]] = None
+    referral_code: Optional[str] = Field(default=None, max_length=32)
+
+
 class UserRegisterRequest(BaseModel):
     email: EmailStr
     password: str
     role: UserRole = UserRole.student
+    profile: Optional[RegistrationProfile] = None
 
     @field_validator("password")
     @classmethod
@@ -119,6 +135,14 @@ class ChangePasswordRequest(BaseModel):
 
 
 class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
     email: EmailStr
 
 

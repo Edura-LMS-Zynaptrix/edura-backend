@@ -191,8 +191,9 @@ async def create_profile_internal(
     """
     Unauthenticated, service-to-service only (blocked at the gateway). Called
     by auth_service when it creates an account itself: an admin made by
-    another admin, or a first-time Google sign-in (seeded with the Google
-    name and photo; the student adds academic details on complete-profile).
+    another admin, a first-time Google sign-in (seeded with the Google name
+    and photo; the student adds academic details on complete-profile), or an
+    email sign-up (the whole registration form, so no login is needed first).
     """
     existing = db.query(UserProfile).filter(UserProfile.user_id == body.user_id).first()
     if existing:
@@ -203,18 +204,44 @@ async def create_profile_internal(
     except ValueError:
         raise HTTPException(status_code=422, detail={"error": "INVALID_ROLE"})
 
+    # An unrecognised referral code is ignored rather than blocking sign-up.
+    referrer = find_referrer(db, body.referral_code)
+
     profile = UserProfile(
         user_id=body.user_id,
         role=role,
         first_name=body.first_name,
         last_name=body.last_name,
+        mobile_no=body.mobile_no,
+        date_of_birth=body.date_of_birth,
+        bio=body.bio,
         avatar_url=body.avatar_url,
+        avatar_public_id=body.avatar_public_id,
+        school=body.school,
+        district=body.district,
+        grade=body.grade,
+        stream_id=body.stream_id,
+        nic_number=body.nic_number,
+        selected_subjects=body.selected_subjects,
         referral_code=_generate_referral_code(db, body.first_name),
     )
     db.add(profile)
+    if referrer:
+        bind_referral(db, profile, referrer)
     db.commit()
     db.refresh(profile)
     return _to_response(profile)
+
+
+@router.delete("/internal/profiles/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_profile_internal(user_id: int, db: Session = Depends(get_db)):
+    """
+    Service-to-service only (blocked at the gateway). Undoes profile creation
+    when auth_service has to roll a sign-up back, so a profile never outlives
+    its account. Quiet when there is nothing to remove.
+    """
+    db.query(UserProfile).filter(UserProfile.user_id == user_id).delete()
+    db.commit()
 
 
 # ── Streams & Subjects reference data ────────────────────────────────────────
