@@ -61,21 +61,22 @@ async def stream_lesson(
         "dQw4w9WgXcQ", description="YouTube video ID for this lesson"
     ),
     course_id: int = Query(
-        None, description="Course ID — if omitted, checks any active enrollment"
+        None, description="Required for students — enrollment is verified"
     ),
     payload: dict = Depends(require_role(_ALL_ROLES)),
 ):
     role = payload.get("role", "")
     if role == "student":
-        student_id = int(payload["sub"])
-        enrolled = False
-        if course_id is not None:
-            enrolled = await is_enrolled(student_id, course_id)
-        else:
-            # Query enrollment service to check if student has any active course
-            enrolled = await is_enrolled(student_id, 0) or await is_enrolled(
-                student_id, 1
+        if course_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "COURSE_ID_REQUIRED",
+                    "message": "course_id query parameter is required for students",
+                },
             )
+        student_id = int(payload["sub"])
+        enrolled = await is_enrolled(student_id, course_id)
         if not enrolled:
             raise HTTPException(
                 status_code=403,
