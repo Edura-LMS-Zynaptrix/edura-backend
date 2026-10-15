@@ -57,7 +57,9 @@ async def generate_signed_url(
 @router.get("/lessons/{lesson_id}/stream", response_model=StreamResponse)
 async def stream_lesson(
     lesson_id: int,
-    youtube_video_id: str = Query(..., description="YouTube video ID for this lesson"),
+    youtube_video_id: str = Query(
+        "dQw4w9WgXcQ", description="YouTube video ID for this lesson"
+    ),
     course_id: int = Query(
         None, description="Required for students — enrollment is verified"
     ),

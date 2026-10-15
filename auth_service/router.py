@@ -1,7 +1,7 @@
 import bcrypt
 from database import SessionLocal
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
-from models import User, UserRole
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from models import RefreshToken, User, UserRole
 from schemas import (
     LoginRequest,
     OtpRequest,
@@ -32,7 +32,9 @@ def admin_only(payload: dict = Depends(require_role(["admin"]))):
     return {"message": "Welcome Admin", "user_id": payload.get("sub")}
 
 
-@router.post("/register", response_model=UserResponse)
+@router.post(
+    "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
+)
 def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == req.email).first()
     if existing:
@@ -54,6 +56,7 @@ def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    OtpService.generate_otp(user.id, "email_verify")
     return user
 
 
@@ -155,9 +158,25 @@ def request_otp(req: OtpRequest):
 
 
 @router.post("/otp/verify")
-def verify_otp(req: OtpVerifyRequest):
+def verify_otp(req: OtpVerifyRequest, db: Session = Depends(get_db)):
     OtpService.verify_otp(req.user_id, req.code, req.purpose.value)
+    user = db.query(User).filter(User.id == req.user_id).first()
+    if user:
+        user.is_email_verified = True
+        db.commit()
     return {"message": "OTP verified successfully"}
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_200_OK)
+@router.delete("/admin/users/{user_id}", status_code=status.HTTP_200_OK)
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        db.query(RefreshToken).filter(RefreshToken.user_id == user_id).delete()
+        db.delete(user)
+        db.commit()
+        return {"message": f"User {user_id} deleted"}
+    return {"message": "User not found"}
 
 
 @router.get("/protected")

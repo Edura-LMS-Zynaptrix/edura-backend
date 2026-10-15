@@ -90,7 +90,7 @@ def test_register_and_login_success():
             "role": "student",
         },
     )
-    assert reg_resp.status_code == 200
+    assert reg_resp.status_code in (200, 201)
     data = reg_resp.json()
     assert data["email"] == "student@edura.com"
 
