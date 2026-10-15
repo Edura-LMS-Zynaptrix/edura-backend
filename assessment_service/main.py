@@ -7,10 +7,16 @@ from router import router
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Assessment Service")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "assessment_service"}
+
+
 app.include_router(router)
+
+
 @app.on_event("startup")
 def on_startup():
     try:
@@ -18,4 +24,3 @@ def on_startup():
         logger.info("Assessment service database tables verified.")
     except Exception as e:
         logger.error(f"Error initializing DB tables on startup: {e}")
-
