@@ -47,12 +47,10 @@ def _get_assessment_or_404(assessment_id: int, db: Session) -> Assessment:
 # Assessment endpoints
 # ---------------------------------------------------------------------------
 
-
 @router.get("/health", tags=["Health"])
 @router.get("/api/assessments/health", tags=["Health"])
 async def assessment_health():
     return {"status": "ok", "service": "assessment_service"}
-
 
 @router.get("/{assessment_id}", response_model=AssessmentResponse)
 @router.get("/api/assessments/{assessment_id}", response_model=AssessmentResponse)
