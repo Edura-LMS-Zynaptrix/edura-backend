@@ -62,7 +62,7 @@ class Assessment(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     course_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    lesson_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    lesson_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     assessment_type: Mapped[AssessmentType] = mapped_column(
@@ -85,7 +85,10 @@ class Assessment(Base):
         nullable=False,
     )
 
-    __table_args__ = (Index("ix_assessments_course_id", "course_id"),)
+    __table_args__ = (
+        Index("ix_assessments_course_id", "course_id"),
+        Index("ix_assessments_lesson_id", "lesson_id"),
+    )
 
 
 class Question(Base):
@@ -132,8 +135,8 @@ class Submission(Base):
     __tablename__ = "submissions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    assessment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    assessment_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[SubmissionStatus] = mapped_column(
         Enum(SubmissionStatus, name="submissionstatus"),
         nullable=False,
@@ -173,8 +176,8 @@ class ViolationLog(Base):
     __tablename__ = "violation_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    submission_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    submission_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
     violation_type: Mapped[ViolationType] = mapped_column(
         Enum(ViolationType, name="violationtype"), nullable=False
     )

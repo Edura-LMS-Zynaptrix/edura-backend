@@ -17,7 +17,15 @@ async def is_enrolled(student_id: int, course_id: int) -> bool:
         if r.status_code != 200:
             return False
         data = r.json()
-        items = data if isinstance(data, list) else data.get("items", [])
-        return any(e.get("status") == "active" for e in items)
+        if isinstance(data, dict):
+            status = str(data.get("status", "")).upper()
+            if status == "ACTIVE":
+                return True
+            items = data.get("items", [])
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+        return any(str(e.get("status", "")).upper() == "ACTIVE" for e in items)
     except Exception:
         return False

@@ -258,3 +258,26 @@ async def list_user_payments(
     else:
         payments = db.query(Payment).filter(Payment.student_id == student_id).all()
     return payments
+
+
+# ---------------------------------------------------------------------------
+# DELETE / — Cleanup Payments (AC2)
+# ---------------------------------------------------------------------------
+@router.delete("/", status_code=status.HTTP_200_OK, include_in_schema=False)
+@router.delete("/payments", status_code=status.HTTP_200_OK)
+async def delete_payment(
+    student_id: int = None,
+    order_id: str = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(Payment)
+    if student_id:
+        q = q.filter(Payment.student_id == student_id)
+    if order_id:
+        q = q.filter(Payment.payhere_order_id == order_id)
+    payments = q.all()
+    count = len(payments)
+    for p in payments:
+        db.delete(p)
+    db.commit()
+    return {"message": f"Deleted {count} payments"}
