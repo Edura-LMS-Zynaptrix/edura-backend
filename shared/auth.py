@@ -1,5 +1,5 @@
 import os
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 import jwt
 from fastapi import HTTPException, Request
@@ -89,3 +89,27 @@ def require_role(roles: List[str]) -> Callable:
         return payload
 
     return _dependency
+
+
+async def get_optional_payload(request: Request) -> Optional[dict]:
+    """
+    FastAPI dependency for routes that serve both anonymous visitors and
+    logged-in users (e.g. public course browsing that's filtered/personalized
+    when a valid token happens to be present). Decodes a Bearer JWT if one is
+    given, but — unlike require_role — never raises 401 for a missing,
+    malformed, or invalid/expired token; it just returns None.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header[7:].strip()
+    if not token:
+        return None
+
+    try:
+        return jwt.decode(
+            token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_aud": False}
+        )
+    except PyJWTError:
+        return None

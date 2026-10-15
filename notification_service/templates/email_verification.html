@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify your Edura email</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .header { text-align: center; border-bottom: 2px solid #0d9488; padding-bottom: 15px; margin-bottom: 20px; }
+        .header h1 { color: #0d9488; margin: 0; font-size: 24px; }
+        .button { display: inline-block; background: #0d9488; color: #ffffff !important; text-decoration: none; padding: 12px 28px; border-radius: 6px; font-weight: bold; margin: 18px 0; }
+        .link { word-break: break-all; font-size: 12px; color: #6b7280; }
+        .footer { margin-top: 30px; font-size: 12px; color: #6b7280; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Verify your email</h1>
+        </div>
+        <p>Welcome to Edura!</p>
+        <p>Please confirm that this is your email address so we can finish setting up your account. The link works for {{ expires_in_hours }} hours.</p>
+        <p style="text-align:center;"><a class="button" href="{{ verify_url }}">Verify my email</a></p>
+        <p>If the button doesn't work, copy this link into your browser:</p>
+        <p class="link">{{ verify_url }}</p>
+        <p>If you didn't create an Edura account, you can ignore this email and nothing will happen.</p>
+        <div class="footer">
+            &copy; Edura Learning Platform. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

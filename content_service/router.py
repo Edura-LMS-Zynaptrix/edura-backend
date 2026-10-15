@@ -1,5 +1,12 @@
 import magic
-from cloudinary_utils import get_signed_url, upload_asset
+from cloudinary_utils import (
+    AVATAR_FOLDER,
+    FOLDER,
+    RECEIPT_FOLDER,
+    delete_asset,
+    get_signed_url,
+    upload_asset,
+)
 from enrollment_client import is_enrolled
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from schemas import (
@@ -18,6 +25,28 @@ _TEACHER_ADMIN = ["teacher", "admin"]
 
 ALLOWED_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
+# Downloadable course materials — documents go to Cloudinary as "raw" so
+# they are delivered as-is (PDF/ZIP delivery as "image" is blocked by default).
+_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+ALLOWED_MATERIAL_MIME_TYPES = ALLOWED_MIME_TYPES | {
+    "application/msword",
+    _DOCX,
+    "application/zip",
+    "application/x-zip-compressed",
+}
+# What libmagic may report for those: OOXML files are zip containers and
+# legacy .doc files are OLE compound documents.
+DETECTED_MATERIAL_MIME_TYPES = ALLOWED_MIME_TYPES | {
+    "application/msword",
+    "application/CDFV2",
+    "application/x-ole-storage",
+    _DOCX,
+    "application/zip",
+}
+MAX_MATERIAL_SIZE = 20 * 1024 * 1024  # 20 MB
+DELETABLE_PREFIX = f"{FOLDER}/"
+ALLOWED_AVATAR_MIME_TYPES = {"image/png", "image/jpeg"}
+MAX_AVATAR_SIZE = 5 * 1024 * 1024  # 5 MB
 YOUTUBE_EMBED_BASE = "https://www.youtube-nocookie.com/embed"
 ALLOW_ORIGIN = "https://edura.lk"
 
@@ -32,7 +61,7 @@ async def generate_signed_url(
     body: SignedUrlRequest,
     payload: dict = Depends(require_role(_ALL_ROLES)),
 ):
-    role = payload.get("role", "")
+    role = payload.get("role", "").lower()
     if role == "student":
         student_id = int(payload["sub"])
         enrolled = await is_enrolled(student_id, body.course_id)
@@ -63,7 +92,7 @@ async def stream_lesson(
     ),
     payload: dict = Depends(require_role(_ALL_ROLES)),
 ):
-    role = payload.get("role", "")
+    role = payload.get("role", "").lower()
     if role == "student":
         if course_id is None:
             raise HTTPException(
@@ -139,4 +168,236 @@ async def upload_file(
         public_id=public_id,
         secure_url=secure_url,
         message="File uploaded successfully",
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /upload-material — downloadable course resources (pdf/doc/docx/zip/images)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/upload-material", response_model=UploadValidationResponse)
+async def upload_material(
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role(_TEACHER_ADMIN)),
+):
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "EMPTY_FILE", "message": "Uploaded file is empty"},
+        )
+    if len(content) > MAX_MATERIAL_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "FILE_TOO_LARGE",
+                "message": "Material exceeds the 20 MB limit",
+            },
+        )
+
+    declared_mime = file.content_type or ""
+    if declared_mime not in ALLOWED_MATERIAL_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": "UNSUPPORTED_MEDIA_TYPE",
+                "message": f"MIME type '{declared_mime}' is not allowed. Allowed: pdf, doc, docx, zip, png, jpeg",
+            },
+        )
+
+    detected_mime = magic.from_buffer(content, mime=True)
+    if detected_mime not in DETECTED_MATERIAL_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": "MIME_MISMATCH",
+                "message": f"File signature indicates '{detected_mime}', which does not match declared type",
+            },
+        )
+
+    is_image = detected_mime.startswith("image/")
+    public_id, secure_url = upload_asset(
+        content,
+        file.filename or "material",
+        resource_type="image" if is_image else "raw",
+    )
+
+    return UploadValidationResponse(
+        valid=True,
+        filename=file.filename or "",
+        size_bytes=len(content),
+        # The declared type is the meaningful one for display (libmagic
+        # reports docx as a plain zip on some builds).
+        mime_type=declared_mime,
+        public_id=public_id,
+        secure_url=secure_url,
+        message="Material uploaded successfully",
+    )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /assets — remove an uploaded content asset from Cloudinary
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/assets", status_code=204)
+async def delete_uploaded_asset(
+    public_id: str = Query(..., min_length=1),
+    payload: dict = Depends(require_role(_TEACHER_ADMIN)),
+):
+    if not public_id.startswith(DELETABLE_PREFIX) or ".." in public_id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "ASSET_NOT_DELETABLE",
+                "message": "Only uploaded content assets can be deleted",
+            },
+        )
+    # Already-gone assets are not an error: the caller just wants it absent.
+    delete_asset(public_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /avatar — self-service profile photo upload (any authenticated role)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/avatar", response_model=UploadValidationResponse)
+async def upload_avatar(
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role(_ALL_ROLES)),
+):
+    """
+    Uploads a profile photo to Cloudinary for the current user. Unlike
+    /upload (course materials, teacher/admin only), any authenticated user
+    may upload their own avatar — it is not course content.
+    """
+    content = await file.read()
+
+    if len(content) > MAX_AVATAR_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "FILE_TOO_LARGE",
+                "message": "Avatar exceeds the 5 MB limit",
+            },
+        )
+
+    declared_mime = file.content_type or ""
+    if declared_mime not in ALLOWED_AVATAR_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": "UNSUPPORTED_MEDIA_TYPE",
+                "message": f"MIME type '{declared_mime}' is not allowed. Allowed: png, jpeg",
+            },
+        )
+
+    detected_mime = magic.from_buffer(content, mime=True)
+    if detected_mime not in ALLOWED_AVATAR_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": "MIME_MISMATCH",
+                "message": f"File signature indicates '{detected_mime}', which does not match declared type",
+            },
+        )
+
+    public_id, secure_url = upload_asset(
+        content, file.filename or "avatar", folder=AVATAR_FOLDER
+    )
+
+    return UploadValidationResponse(
+        valid=True,
+        filename=file.filename or "",
+        size_bytes=len(content),
+        mime_type=detected_mime,
+        public_id=public_id,
+        secure_url=secure_url,
+        message="Avatar uploaded successfully",
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /internal/receipt-upload — service-to-service only (payment_service)
+# ---------------------------------------------------------------------------
+
+
+_INTERNAL_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+_MAX_INTERNAL_IMAGE = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/internal/image-upload", response_model=UploadValidationResponse)
+async def upload_image_internal(file: UploadFile = File(...)):
+    """
+    Service-to-service only (blocked at the gateway): assessment_service stores
+    question/option images and exam thumbnails from bulk ZIP uploads. The file
+    signature decides the type, never the name or the declared MIME.
+    """
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=422, detail={"error": "EMPTY_FILE", "message": "Image is empty"}
+        )
+    if len(content) > _MAX_INTERNAL_IMAGE:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "FILE_TOO_LARGE", "message": "Image exceeds 10 MB"},
+        )
+    detected_mime = magic.from_buffer(content, mime=True)
+    if detected_mime not in _INTERNAL_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": "NOT_AN_IMAGE",
+                "message": f"File content is '{detected_mime}', not an image",
+            },
+        )
+    public_id, secure_url = upload_asset(
+        content, file.filename or "image", resource_type="image"
+    )
+    return UploadValidationResponse(
+        valid=True,
+        filename=file.filename or "",
+        size_bytes=len(content),
+        mime_type=detected_mime,
+        public_id=public_id,
+        secure_url=secure_url,
+        message="Image uploaded successfully",
+    )
+
+
+@router.post("/internal/receipt-upload", response_model=UploadValidationResponse)
+async def upload_receipt_internal(file: UploadFile = File(...)):
+    """
+    No auth dependency: called server-to-server by payment_service, which has
+    already authenticated and size/MIME-validated the request itself — mirrors
+    the same unauthenticated internal-call pattern as enrollment_service's
+    /enrollments lookup and course_service's /{course_id}/owner.
+    """
+    content = await file.read()
+
+    detected_mime = magic.from_buffer(content, mime=True)
+    if detected_mime not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": "MIME_MISMATCH",
+                "message": f"File signature indicates '{detected_mime}', which does not match declared type",
+            },
+        )
+
+    public_id, secure_url = upload_asset(
+        content, file.filename or "receipt", folder=RECEIPT_FOLDER
+    )
+
+    return UploadValidationResponse(
+        valid=True,
+        filename=file.filename or "",
+        size_bytes=len(content),
+        mime_type=detected_mime,
+        public_id=public_id,
+        secure_url=secure_url,
+        message="Receipt uploaded successfully",
     )

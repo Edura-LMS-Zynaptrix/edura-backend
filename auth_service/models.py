@@ -45,13 +45,22 @@ class User(Base):
     email: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True
     )
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Nullable: a Google-only account has no password until it sets one via
+    # POST /set-password — this is what makes the same email work with both
+    # Google Sign-In and email+password once linked.
+    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, name="userrole"), nullable=False, default=UserRole.student
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_email_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
+    )
+    google_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
+    )
+    auth_provider: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="email"
     )
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

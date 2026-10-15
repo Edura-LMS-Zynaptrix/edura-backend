@@ -1,6 +1,20 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
+
+
+class LessonProgressUpdateRequest(BaseModel):
+    lesson_id: int
+    total_lessons: Optional[int] = None
+    watch_duration_seconds: int = 0
+    last_position_seconds: int = 0
+
+
+class LessonProgressItem(BaseModel):
+    lesson_id: int
+    is_completed: bool
+    watch_duration_seconds: int
+    last_position_seconds: int
 
 
 class AssessmentScoreItem(BaseModel):

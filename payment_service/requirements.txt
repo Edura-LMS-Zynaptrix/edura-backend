@@ -7,4 +7,5 @@ pydantic==2.*
 python-multipart>=0.0.9
 PyJWT[crypto]>=2.8.0
 redis
-pika
+pika
+httpx

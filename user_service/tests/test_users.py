@@ -255,3 +255,84 @@ class TestDeleteUser:
     def test_student_cannot_delete(self, client, student, teacher):
         r = client.delete("/202", headers=_auth(101, "student"))
         assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /internal/create-profile — profile created by auth_service at sign-up
+# ---------------------------------------------------------------------------
+
+
+class TestInternalCreateProfile:
+    def test_email_signup_stores_the_whole_form_and_applies_the_referral(
+        self, client, db, student
+    ):
+        student.referral_code = "ALICE123"
+        db.commit()
+        r = client.post(
+            "/internal/create-profile",
+            json={
+                "user_id": 777,
+                "role": "student",
+                "first_name": "Nimal",
+                "last_name": "Perera",
+                "mobile_no": "0771234567",
+                "school": "Royal College",
+                "district": "Colombo",
+                "grade": 11,
+                "selected_subjects": ["Maths", "Science"],
+                "referral_code": "ALICE123",
+            },
+        )
+        assert r.status_code == 201
+        body = r.json()
+        assert (body["school"], body["district"], body["grade"]) == (
+            "Royal College",
+            "Colombo",
+            11,
+        )
+        assert body["selected_subjects"] == ["Maths", "Science"]
+        assert body["referral_code"]
+        created = db.query(UserProfile).filter(UserProfile.user_id == 777).one()
+        assert created.referred_by_user_id == student.user_id
+
+        db.query(UserProfile).filter(UserProfile.user_id == 777).delete()
+        db.commit()
+
+    def test_invalid_details_are_refused(self, client):
+        r = client.post(
+            "/internal/create-profile",
+            json={
+                "user_id": 778,
+                "role": "student",
+                "first_name": "Bad",
+                "last_name": "Phone",
+                "mobile_no": "not-a-number",
+            },
+        )
+        assert r.status_code == 422
+
+    def test_name_only_profiles_still_work(self, client, db):
+        r = client.post(
+            "/internal/create-profile",
+            json={"user_id": 779, "role": "admin", "first_name": "A", "last_name": ""},
+        )
+        assert r.status_code == 201
+        db.query(UserProfile).filter(UserProfile.user_id == 779).delete()
+        db.commit()
+
+    def test_rolled_back_signup_removes_its_profile(self, client, db):
+        client.post(
+            "/internal/create-profile",
+            json={
+                "user_id": 780,
+                "role": "student",
+                "first_name": "Gone",
+                "last_name": "Soon",
+            },
+        )
+        assert db.query(UserProfile).filter(UserProfile.user_id == 780).count() == 1
+
+        assert client.delete("/internal/profiles/780").status_code == 204
+        assert db.query(UserProfile).filter(UserProfile.user_id == 780).count() == 0
+        # nothing to remove is not an error
+        assert client.delete("/internal/profiles/780").status_code == 204

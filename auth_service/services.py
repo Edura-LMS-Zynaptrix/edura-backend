@@ -1,5 +1,8 @@
 import hashlib
+import json
 import secrets
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -57,7 +60,9 @@ except Exception:
 
 class TokenService:
     @staticmethod
-    def create_access_token(user_id: int, role: str) -> str:
+    def create_access_token(
+        user_id: int, role: str, email: Optional[str] = None
+    ) -> str:
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
@@ -67,6 +72,8 @@ class TokenService:
             "exp": expire,
             "iat": datetime.now(timezone.utc),
         }
+        if email:
+            payload["email"] = email
         return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
     @staticmethod
@@ -133,9 +140,162 @@ class TokenService:
         new_token_str = TokenService.create_refresh_token(db, db_token.user_id)
         return db_token.user_id, new_token_str
 
+    @staticmethod
+    def revoke_refresh_token(db: Session, token_str: str) -> None:
+        token_hash = hashlib.sha256(token_str.encode()).hexdigest()
+        db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).update(
+            {RefreshToken.is_revoked: True}
+        )
+        db.commit()
+
+    @staticmethod
+    def revoke_all_for_user(db: Session, user_id: int) -> None:
+        db.query(RefreshToken).filter(
+            RefreshToken.user_id == user_id, RefreshToken.is_revoked.is_(False)
+        ).update({RefreshToken.is_revoked: True})
+        db.commit()
+
+
+class GoogleAuthService:
+    """
+    Verifies a Google OAuth *access token* (implicit flow — the frontend uses
+    @react-oauth/google's useGoogleLogin({flow: 'implicit'}), not one-tap
+    id_tokens) by calling Google's userinfo endpoint directly. No client
+    secret or google-auth library needed for this flow.
+    """
+
+    USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+    @staticmethod
+    def verify_access_token(access_token: str) -> Optional[dict]:
+        try:
+            req = urllib.request.Request(
+                GoogleAuthService.USERINFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+
+            email = data.get("email")
+            if not email:
+                return None
+
+            return {
+                "google_id": data.get("sub", ""),
+                "email": email,
+                "full_name": data.get("name", ""),
+                "picture": data.get("picture", ""),
+                # Google only reports an address it has confirmed as verified.
+                "email_verified": bool(data.get("email_verified", False)),
+            }
+        except (urllib.error.HTTPError, urllib.error.URLError, Exception):
+            return None
+
+
+class PasswordResetService:
+    """
+    Stateless reset links: a signed JWT that also carries a fingerprint of the
+    current password hash, so the link stops working once it has been used
+    (or the password changes some other way) — no token table needed.
+    """
+
+    PURPOSE = "password_reset"
+
+    @staticmethod
+    def _fingerprint(hashed_password: Optional[str]) -> str:
+        return hashlib.sha256((hashed_password or "no-password").encode()).hexdigest()[
+            :16
+        ]
+
+    @staticmethod
+    def create_token(user_id: int, hashed_password: Optional[str]) -> str:
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": str(user_id),
+            "purpose": PasswordResetService.PURPOSE,
+            "pwd": PasswordResetService._fingerprint(hashed_password),
+            "iat": now,
+            "exp": now + timedelta(minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES),
+        }
+        return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+    @staticmethod
+    def read_token(token: str) -> Optional[Tuple[int, str]]:
+        """Returns (user_id, password fingerprint) or None when invalid/expired."""
+        try:
+            data = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
+        except jwt.PyJWTError:
+            return None
+        if data.get("purpose") != PasswordResetService.PURPOSE:
+            return None
+        try:
+            return int(data["sub"]), str(data.get("pwd", ""))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def matches(hashed_password: Optional[str], fingerprint: str) -> bool:
+        return secrets.compare_digest(
+            PasswordResetService._fingerprint(hashed_password), fingerprint
+        )
+
+
+class EmailVerificationService:
+    """
+    Stateless verification links: a signed JWT carrying the address it was sent
+    to. Using the link twice is harmless (the account is simply already
+    verified), and a token minted for one purpose is rejected for the others.
+    """
+
+    PURPOSE = "email_verification"
+
+    @staticmethod
+    def create_token(user_id: int, email: str) -> str:
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": str(user_id),
+            "purpose": EmailVerificationService.PURPOSE,
+            "email": email,
+            "iat": now,
+            "exp": now + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
+        }
+        return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+    @staticmethod
+    def read_token(token: str) -> Optional[Tuple[int, str]]:
+        """Returns (user_id, email) or None when invalid or expired."""
+        try:
+            data = jwt.decode(
+                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            )
+        except jwt.PyJWTError:
+            return None
+        if data.get("purpose") != EmailVerificationService.PURPOSE:
+            return None
+        try:
+            return int(data["sub"]), str(data["email"])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def may_resend(user_id: int) -> bool:
+        """True (and starts the wait) unless a link was requested a moment ago."""
+        key = f"email_verification_sent:{user_id}"
+        if redis_client.get(key):
+            return False
+        redis_client.set(key, "1", ex=settings.EMAIL_VERIFICATION_RESEND_SECONDS)
+        return True
+
 
 class SessionService:
     MAX_SESSIONS = 3
+
+    @staticmethod
+    def delete_all(user_id: int) -> None:
+        for key in redis_client.keys(f"session:{user_id}:*"):
+            redis_client.delete(key)
 
     @staticmethod
     def create_session(user_id: int, role: str) -> str:

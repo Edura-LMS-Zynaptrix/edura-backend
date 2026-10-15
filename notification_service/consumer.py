@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -5,7 +6,7 @@ import time
 from datetime import datetime, timezone
 
 import pika
-from database import SessionLocal
+from database import Base, SessionLocal, engine
 from email_service import render_email, send_email
 from models import (
     NotificationChannel,
@@ -13,6 +14,7 @@ from models import (
     NotificationLog,
     NotificationStatus,
 )
+from sqlalchemy import text
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -24,7 +26,9 @@ EXCHANGE_NAME = "edura.events"
 QUEUE_NAME = "notification.queue"
 
 
-def process_message(ch, method, properties, body):
+def process_message(  # noqa: C901 - one branch per event type
+    ch, method, properties, body
+):
     routing_key = method.routing_key
     logger.info(f"Received event with routing key: {routing_key}")
     db = SessionLocal()
@@ -45,6 +49,7 @@ def process_message(ch, method, properties, body):
         context = {}
         event_type = NotificationEvent.general
         reference_id = None
+        attachments = []
 
         if routing_key == "auth.otp-requested":
             subject = "Your Edura Verification Code"
@@ -54,6 +59,44 @@ def process_message(ch, method, properties, body):
                 "otp_code": data.get("otp_code", "000000"),
                 "expires_in_minutes": data.get("expires_in_minutes", 5),
             }
+        elif routing_key == "auth.email-verification-requested":
+            subject = "Verify your Edura email address"
+            template_name = "email_verification.html"
+            event_type = NotificationEvent.email_verification_requested
+            minutes = int(data.get("expires_in_minutes", 1440))
+            context = {
+                "verify_url": data.get("verify_url", "#"),
+                "expires_in_hours": max(1, round(minutes / 60)),
+            }
+        elif routing_key == "auth.password-reset-requested":
+            subject = "Reset your Edura password"
+            template_name = "password_reset.html"
+            event_type = NotificationEvent.password_reset_requested
+            context = {
+                "reset_url": data.get("reset_url", "#"),
+                "expires_in_minutes": data.get("expires_in_minutes", 60),
+            }
+        elif routing_key == "auth.password-changed":
+            subject = "Your Edura password was changed"
+            template_name = "password_changed.html"
+            event_type = NotificationEvent.password_changed
+            context = {}
+        elif routing_key == "report.progress":
+            month = data.get("month", "")
+            subject = f"Your Edura Progress Report - {month}".rstrip(" -")
+            template_name = "progress_report.html"
+            event_type = NotificationEvent.progress_report
+            context = {
+                "student_name": data.get("student_name", "Student"),
+                "month": month,
+            }
+            attachments = [
+                {
+                    "filename": data.get("filename", "Progress_Report.pdf"),
+                    "data": base64.b64decode(data["pdf_base64"]),
+                    "subtype": "pdf",
+                }
+            ]
         elif routing_key == "payment.success":
             subject = "Payment Confirmation - Edura"
             template_name = "payment_confirm.html"
@@ -94,7 +137,12 @@ def process_message(ch, method, properties, body):
 
         # Send Email via SMTP
         try:
-            send_email(to_email=email, subject=subject, html_body=html_body)
+            send_email(
+                to_email=email,
+                subject=subject,
+                html_body=html_body,
+                attachments=attachments,
+            )
 
             log_entry = NotificationLog(
                 recipient_id=recipient_id,
@@ -134,13 +182,16 @@ def process_message(ch, method, properties, body):
             db.add(log_entry)
             db.commit()
 
-            # Requeue message for retry
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # The failure is recorded above. Requeueing would redeliver it
+            # immediately and forever while SMTP is down or unconfigured.
+            ch.basic_ack(delivery_tag=method.delivery_tag)
 
     except Exception as e:
         logger.error(f"Error processing message ({routing_key}): {e}")
         db.rollback()
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+        # Don't requeue: a message that fails here fails the same way every
+        # time, and requeueing would redeliver it in a tight loop.
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     finally:
         db.close()
 
@@ -162,6 +213,10 @@ def start_consumer():
 
             binding_keys = [
                 "auth.otp-requested",
+                "auth.email-verification-requested",
+                "auth.password-reset-requested",
+                "auth.password-changed",
+                "report.progress",
                 "payment.success",
                 "certificate.issued",
                 "proctoring.violation",
@@ -185,5 +240,31 @@ def start_consumer():
             time.sleep(5)
 
 
+def prepare_database():
+    """The container runs this consumer, not the API app, so its tables are created here."""
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Notification tables verified.")
+    except Exception as e:
+        logger.error(f"Error creating notification tables: {e}")
+
+    # create_all() never alters an existing Postgres enum type.
+    statements = (
+        "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'password_reset_requested'",
+        "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'password_changed'",
+        "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'email_verification_requested'",
+        "ALTER TYPE notificationevent ADD VALUE IF NOT EXISTS 'progress_report'",
+    )
+    try:
+        # ADD VALUE can't run inside a transaction block on older Postgres.
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+        logger.info("Notification enum migrations applied.")
+    except Exception as e:
+        logger.error(f"Error applying notification enum migrations: {e}")
+
+
 if __name__ == "__main__":
+    prepare_database()
     start_consumer()

@@ -16,6 +16,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Schema creation error: {e}", flush=True)
 
+    try:
+        from database import engine
+        from sqlalchemy import text
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
+    except Exception as e:
+        print(f"Column migration error: {e}", flush=True)
+
     # Start RabbitMQ consumer in background thread on container startup
     consumer_thread = threading.Thread(target=consumer.start_consumer, daemon=True)
     consumer_thread.start()

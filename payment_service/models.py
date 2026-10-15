@@ -1,7 +1,7 @@
 """
 payment_service/models.py
 SQLAlchemy 2.0 ORM models for the Payment Service.
-Entities: Payment, PaymentReceipt
+Entities: Payment, PaymentReceipt, BankAccount
 
 Matches ER diagram:
 - payment entity: amount, reference_no, due_time, date_time
@@ -12,7 +12,7 @@ Matches ER diagram:
 import enum
 
 from database import Base  # shared Base from database.py
-from sqlalchemy import DateTime, Enum, Index, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -91,8 +91,11 @@ class Payment(Base):
     )
 
     __table_args__ = (
-        Index("ix_payments_student_id", "student_id"),
-        Index("ix_payments_course_id", "course_id"),
+        # student_id/course_id already get an index from index=True above —
+        # these duplicate Index() entries (same auto-generated name) made
+        # create_all() fail with DuplicateTable on every single startup,
+        # which aborted the whole call before payment_receipts (declared
+        # after this table) ever got created.
         Index("ix_payments_status", "payment_status"),
     )
 
@@ -110,6 +113,7 @@ class PaymentReceipt(Base):
     payment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     receipt_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    receipt_public_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     receipt_status: Mapped[ReceiptStatus] = mapped_column(
         Enum(ReceiptStatus, name="receiptstatus"),
         nullable=False,
@@ -130,7 +134,28 @@ class PaymentReceipt(Base):
         nullable=False,
     )
 
-    __table_args__ = (
-        Index("ix_payment_receipts_payment_id", "payment_id"),
-        Index("ix_payment_receipts_student_id", "student_id"),
+    # payment_id/student_id already get an index from index=True above —
+    # no need for __table_args__ here (same duplicate-index bug as Payment).
+
+
+class BankAccount(Base):
+    """A platform bank account students deposit into before uploading a slip."""
+
+    __tablename__ = "bank_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    bank_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    account_number: Mapped[str] = mapped_column(String(60), nullable=False)
+    account_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    branch: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    order_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )

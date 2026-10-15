@@ -156,3 +156,9 @@ Thumbs.db
 *.sqlite3
 test_auth.db
 auth.db
+
+# Master admin bootstrap scripts — take email/password as CLI args, but the
+# defaults baked into __main__ (admin@edura.lk / Admin@123) shouldn't sit in
+# version control since anyone with the repo could log in as admin with them.
+auth_service/create_master_admin.py
+user_service/create_master_admin_profile.py

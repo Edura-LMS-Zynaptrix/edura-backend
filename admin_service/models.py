@@ -11,7 +11,7 @@ the AuditLog table for tracking all administrative actions.
 import enum
 
 from database import Base  # shared Base from database.py
-from sqlalchemy import DateTime, Enum, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -74,6 +74,67 @@ class AuditLog(Base):
     )
 
     __table_args__ = (
-        Index("ix_audit_logs_actor_id", "actor_id"),
+        # actor_id already gets an index from index=True above — this
+        # duplicate Index() (same auto-generated name) made create_all()
+        # fail with DuplicateTable on every startup.
         Index("ix_audit_logs_target_type_id", "target_type", "target_id"),
+    )
+
+
+class Feedback(Base):
+    """
+    A suggestion / bug report / other note sent from the site footer form.
+    Guests may submit too, so user_id (auth_service user) is optional and the
+    contact details are stored as given.
+    """
+
+    __tablename__ = "feedbacks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ChatConversation(Base):
+    """
+    One support thread. A guest thread is keyed by the browser's random
+    session_id; once that guest signs in, sync attaches it to their user_id.
+    """
+
+    __tablename__ = "chat_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_message_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    is_from_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sender_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

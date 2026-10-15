@@ -168,7 +168,7 @@ def test_process_proctoring_violation():
         db.close()
 
 
-def test_smtp_failure_nacks_and_logs_failed():
+def test_smtp_failure_acks_and_logs_failed():
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 5
@@ -190,8 +190,9 @@ def test_smtp_failure_nacks_and_logs_failed():
     ):
         process_message(mock_ch, mock_method, None, body)
 
-        mock_ch.basic_nack.assert_called_once_with(delivery_tag=5, requeue=True)
-        mock_ch.basic_ack.assert_not_called()
+        # The failure is logged and the message acked, not requeued forever.
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=5)
+        mock_ch.basic_nack.assert_not_called()
 
     db = TestingSessionLocal()
     try:
@@ -251,5 +252,90 @@ def test_start_consumer():
         mock_pika_conn.assert_called_once()
         mock_channel.exchange_declare.assert_called_once()
         mock_channel.queue_declare.assert_called_once()
-        assert mock_channel.queue_bind.call_count == 5
+        assert mock_channel.queue_bind.call_count == 9
         mock_channel.start_consuming.assert_called_once()
+
+
+def test_process_progress_report_attaches_pdf():
+    import base64
+
+    mock_ch = MagicMock()
+    mock_method = MagicMock()
+    mock_method.delivery_tag = 9
+    mock_method.routing_key = "report.progress"
+
+    body = json.dumps(
+        {
+            "user_id": 7,
+            "email": "nimal@example.com",
+            "student_name": "Nimal",
+            "month": "October 2026",
+            "filename": "Progress_Report_Nimal_20261010.pdf",
+            "pdf_base64": base64.b64encode(b"%PDF-1.4 report").decode(),
+        }
+    )
+
+    with patch("consumer.send_email") as mock_send:
+        process_message(mock_ch, mock_method, None, body)
+
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs["to_email"] == "nimal@example.com"
+        assert kwargs["subject"] == "Your Edura Progress Report - October 2026"
+        assert "Nimal" in kwargs["html_body"]
+        (attachment,) = kwargs["attachments"]
+        assert attachment["filename"] == "Progress_Report_Nimal_20261010.pdf"
+        assert attachment["data"] == b"%PDF-1.4 report"
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=9)
+
+    db = TestingSessionLocal()
+    try:
+        log = (
+            db.query(NotificationLog)
+            .filter_by(recipient_email="nimal@example.com")
+            .first()
+        )
+        assert log.event_type == NotificationEvent.progress_report
+        assert log.status == NotificationStatus.sent
+        assert (
+            "%PDF" not in log.body
+        )  # the log keeps the email body, not the attachment
+    finally:
+        db.close()
+
+
+def test_process_email_verification_sends_the_link():
+    mock_ch = MagicMock()
+    mock_method = MagicMock()
+    mock_method.delivery_tag = 11
+    mock_method.routing_key = "auth.email-verification-requested"
+
+    body = json.dumps(
+        {
+            "user_id": 61,
+            "email": "newbie@example.com",
+            "verify_url": "http://localhost:3000/verify-email?token=abc.def.ghi",
+            "expires_in_minutes": 1440,
+        }
+    )
+
+    with patch("consumer.send_email") as mock_send:
+        process_message(mock_ch, mock_method, None, body)
+
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs["to_email"] == "newbie@example.com"
+        assert kwargs["subject"] == "Verify your Edura email address"
+        assert "verify-email?token=abc.def.ghi" in kwargs["html_body"]
+        assert "24 hours" in kwargs["html_body"]
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=11)
+
+    db = TestingSessionLocal()
+    try:
+        log = (
+            db.query(NotificationLog)
+            .filter_by(recipient_email="newbie@example.com")
+            .first()
+        )
+        assert log.event_type == NotificationEvent.email_verification_requested
+        assert log.status == NotificationStatus.sent
+    finally:
+        db.close()
