@@ -12,7 +12,11 @@ ROUTING_KEY_GRADED = "assessment.graded"
 
 
 def publish_assessment_graded(
-    student_id: int, assessment_id: int, score: float, passed: bool
+    student_id: int,
+    assessment_id: int,
+    score: float,
+    passed: bool,
+    course_id: int | None = None,
 ):
     """
     Publishes assessment.graded event to edura.events exchange.
@@ -23,6 +27,8 @@ def publish_assessment_graded(
         "score": score,
         "passed": passed,
     }
+    if course_id is not None:
+        payload["course_id"] = course_id
     try:
         connection = pika.BlockingConnection(
             pika.ConnectionParameters(

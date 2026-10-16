@@ -2,6 +2,7 @@ import json
 import random
 import uuid
 from datetime import datetime, timezone
+from typing import List, Optional
 
 from database import get_db
 from events import publish_assessment_graded
@@ -17,11 +18,13 @@ from models import (
 )
 from redis_client import get_redis_client
 from schemas import (
+    AssessmentCreate,
     AssessmentResponse,
     QuestionPublic,
     StartSessionResponse,
     SubmitAssessmentRequest,
     SubmitAssessmentResponse,
+    ViolationRecord,
     ViolationRequest,
 )
 from sqlalchemy.orm import Session
@@ -225,6 +228,10 @@ async def submit_assessment(
             # Short answer requires manual review per BR-002; 0 marks auto-graded
             pass
 
+    requires_manual_review = any(
+        q.question_type == QuestionType.short_answer for q in questions
+    )
+
     score = (
         round((obtained_marks / total_possible_marks) * 100, 2)
         if total_possible_marks > 0
@@ -258,6 +265,7 @@ async def submit_assessment(
 
     submission.status = SubmissionStatus.graded
     submission.score = score
+    submission.requires_manual_review = requires_manual_review
     submission.answers_json = json.dumps([a.model_dump() for a in body.answers])
     submission.submitted_at = datetime.now(timezone.utc)
     db.commit()
@@ -272,6 +280,7 @@ async def submit_assessment(
         assessment_id=assessment_id,
         score=score,
         passed=passed,
+        course_id=assessment.course_id,
     )
 
     return SubmitAssessmentResponse(
@@ -281,6 +290,7 @@ async def submit_assessment(
         correct_count=correct_count,
         total_questions=total_questions,
         auto_submitted=auto_submitted,
+        requires_manual_review=requires_manual_review,
     )
 
 
@@ -359,3 +369,120 @@ async def record_violation(
     db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/api/assessments",
+    response_model=AssessmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_assessment(
+    body: AssessmentCreate,
+    db: Session = Depends(get_db),
+    _: dict = Depends(require_role(["teacher", "admin"])),
+):
+    """
+    Create an assessment with questions (for teachers and admins).
+    """
+    a_type = (
+        AssessmentType.exam
+        if str(body.assessment_type).lower() == "exam"
+        else AssessmentType.quiz
+    )
+    assessment = Assessment(
+        course_id=body.course_id,
+        lesson_id=body.lesson_id,
+        title=body.title,
+        description=body.description,
+        assessment_type=a_type,
+        quiz_password=body.quiz_password,
+        time_limit_minutes=body.time_limit_minutes,
+        max_score=body.max_score,
+        pass_score=body.pass_score,
+        is_published=body.is_published,
+    )
+    db.add(assessment)
+    db.commit()
+    db.refresh(assessment)
+
+    if body.questions:
+        for idx, q_data in enumerate(body.questions, start=1):
+            q_type = QuestionType.mcq
+            if q_data.question_type == "true_false":
+                q_type = QuestionType.true_false
+            elif q_data.question_type == "short_answer":
+                q_type = QuestionType.short_answer
+
+            question = Question(
+                assessment_id=assessment.id,
+                question_text=q_data.question_text,
+                question_type=q_type,
+                options_json=q_data.options_json,
+                correct_answer=q_data.correct_answer,
+                marks=q_data.marks,
+                position=q_data.position or idx,
+            )
+            db.add(question)
+        db.commit()
+
+    return assessment
+
+
+@router.delete("/{assessment_id}", status_code=status.HTTP_200_OK)
+@router.delete("/api/assessments/{assessment_id}", status_code=status.HTTP_200_OK)
+async def delete_assessment(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    _: dict = Depends(require_role(["teacher", "admin"])),
+):
+    """
+    Delete assessment and its associated questions, submissions, and violations.
+    """
+    subs = db.query(Submission).filter(Submission.assessment_id == assessment_id).all()
+    sub_ids = [s.id for s in subs]
+    if sub_ids:
+        db.query(ViolationLog).filter(
+            ViolationLog.submission_id.in_(sub_ids)
+        ).delete(synchronize_session=False)
+        db.query(Submission).filter(
+            Submission.id.in_(sub_ids)
+        ).delete(synchronize_session=False)
+
+    db.query(Question).filter(
+        Question.assessment_id == assessment_id
+    ).delete(synchronize_session=False)
+    db.query(Assessment).filter(
+        Assessment.id == assessment_id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"message": "Assessment and related records deleted successfully"}
+
+
+@router.get("/violations", response_model=List[ViolationRecord])
+@router.get("/api/assessments/violations", response_model=List[ViolationRecord])
+@router.get("/api/admin/violations", response_model=List[ViolationRecord])
+async def list_violations(
+    db: Session = Depends(get_db),
+    _: dict = Depends(require_role(["admin"])),
+):
+    """
+    List all violation logs for administration.
+    """
+    records = db.query(ViolationLog).order_by(ViolationLog.id.desc()).all()
+    return [
+        ViolationRecord(
+            id=v.id,
+            submission_id=v.submission_id,
+            student_id=v.student_id,
+            violation_type=(
+                v.violation_type.value
+                if hasattr(v.violation_type, "value")
+                else str(v.violation_type)
+            ),
+            detail=v.detail,
+            occurred_at=v.occurred_at.isoformat() if v.occurred_at else None,
+        )
+        for v in records
+    ]
+

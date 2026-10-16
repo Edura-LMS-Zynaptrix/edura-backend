@@ -57,6 +57,7 @@ class SubmitAssessmentResponse(BaseModel):
     correct_count: int
     total_questions: int
     auto_submitted: bool = False
+    requires_manual_review: bool = False
 
 
 class ViolationRequest(BaseModel):
@@ -64,3 +65,30 @@ class ViolationRequest(BaseModel):
     violation_type: str
     detail: Optional[str] = None
     timestamp: Optional[str] = None
+
+
+class QuestionCreate(BaseModel):
+    question_text: str
+    question_type: str = "mcq"
+    options_json: Optional[str] = None
+    correct_answer: str
+    marks: int = 1
+    position: int = 0
+
+
+class AssessmentCreate(AssessmentBase):
+    course_id: int
+    lesson_id: Optional[int] = None
+    quiz_password: Optional[str] = None
+    questions: Optional[List[QuestionCreate]] = []
+
+
+class ViolationRecord(BaseModel):
+    id: int
+    submission_id: int
+    student_id: int
+    violation_type: str
+    detail: Optional[str] = None
+    occurred_at: Optional[str] = None
+
+    model_config = {"from_attributes": True}

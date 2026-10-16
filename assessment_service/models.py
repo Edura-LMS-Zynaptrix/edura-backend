@@ -144,6 +144,9 @@ class Submission(Base):
     )
     answers_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON object
     score: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
+    requires_manual_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     started_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
