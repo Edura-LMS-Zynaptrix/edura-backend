@@ -1,53 +1,47 @@
+import base64
 from unittest.mock import MagicMock, patch
 
-from email_service import send_email
+import email_service
+import httpx
+import pytest
+from email_service import EmailDeliveryError, send_email
 
 
-def test_send_email_smtp_dispatch():
-    with patch("smtplib.SMTP") as mock_smtp_cls:
-        mock_smtp_inst = MagicMock()
-        mock_smtp_cls.return_value = mock_smtp_inst
+@pytest.fixture(autouse=True)
+def configured(monkeypatch):
+    monkeypatch.setattr(email_service, "RESEND_API_KEY", "re_test_key")
+    monkeypatch.setattr(
+        email_service, "RESEND_FROM_EMAIL", "Edura <noreply@edura.test>"
+    )
 
-        html_content = "<h1>Test</h1>"
+
+def _response(status=200, body=None):
+    response = MagicMock(status_code=status, text=str(body))
+    response.json.return_value = body or {"id": "abc"}
+    return response
+
+
+def test_send_email_posts_to_resend_with_the_api_key():
+    with patch("email_service.httpx.post", return_value=_response()) as post:
         send_email(
             to_email="recipient@example.com",
             subject="Test Subject",
-            html_body=html_content,
+            html_body="<h1>Test</h1>",
         )
 
-        mock_smtp_cls.assert_called_once()
-        mock_smtp_inst.sendmail.assert_called_once()
-        mock_smtp_inst.quit.assert_called_once()
-
-
-def test_send_email_with_credentials_and_tls():
-    with (
-        patch("smtplib.SMTP") as mock_smtp_cls,
-        patch("email_service.SMTP_USER", "user@example.com"),
-        patch("email_service.SMTP_PASSWORD", "secret"),
-        patch("email_service.SMTP_USE_TLS", True),
-    ):
-        mock_smtp_inst = MagicMock()
-        mock_smtp_cls.return_value = mock_smtp_inst
-
-        send_email(
-            to_email="recipient@example.com",
-            subject="TLS Test",
-            html_body="<p>TLS Body</p>",
-        )
-
-        mock_smtp_inst.starttls.assert_called_once()
-        mock_smtp_inst.login.assert_called_once_with("user@example.com", "secret")
-        mock_smtp_inst.sendmail.assert_called_once()
+    post.assert_called_once()
+    assert post.call_args.args[0] == "https://api.resend.com/emails"
+    assert post.call_args.kwargs["headers"] == {"Authorization": "Bearer re_test_key"}
+    assert post.call_args.kwargs["json"] == {
+        "from": "Edura <noreply@edura.test>",
+        "to": ["recipient@example.com"],
+        "subject": "Test Subject",
+        "html": "<h1>Test</h1>",
+    }
 
 
 def test_send_email_with_pdf_attachment():
-    import email
-
-    with patch("smtplib.SMTP") as mock_smtp_cls:
-        mock_smtp_inst = MagicMock()
-        mock_smtp_cls.return_value = mock_smtp_inst
-
+    with patch("email_service.httpx.post", return_value=_response()) as post:
         send_email(
             to_email="recipient@example.com",
             subject="Report",
@@ -57,11 +51,33 @@ def test_send_email_with_pdf_attachment():
             ],
         )
 
-        raw = mock_smtp_inst.sendmail.call_args[0][2]
-        msg = email.message_from_string(raw)
-        assert msg.get_content_type() == "multipart/mixed"
-        parts = [p for p in msg.walk() if p.get_filename()]
-        assert [p.get_filename() for p in parts] == ["report.pdf"]
-        assert parts[0].get_content_type() == "application/pdf"
-        assert parts[0].get_payload(decode=True) == b"%PDF-1.4 test"
-        assert any(p.get_content_type() == "text/html" for p in msg.walk())
+    (attachment,) = post.call_args.kwargs["json"]["attachments"]
+    assert attachment["filename"] == "report.pdf"
+    assert base64.b64decode(attachment["content"]) == b"%PDF-1.4 test"
+
+
+def test_no_attachments_key_when_there_are_none():
+    with patch("email_service.httpx.post", return_value=_response()) as post:
+        send_email("a@example.com", "Hi", "<p>x</p>")
+    assert "attachments" not in post.call_args.kwargs["json"]
+
+
+def test_missing_api_key_fails_clearly_without_calling_resend(monkeypatch):
+    monkeypatch.setattr(email_service, "RESEND_API_KEY", "")
+    with patch("email_service.httpx.post") as post:
+        with pytest.raises(EmailDeliveryError, match="RESEND_API_KEY"):
+            send_email("a@example.com", "Hi", "<p>x</p>")
+    post.assert_not_called()
+
+
+def test_a_rejected_email_raises_with_resends_reason():
+    rejected = _response(403, {"message": "The domain is not verified"})
+    with patch("email_service.httpx.post", return_value=rejected):
+        with pytest.raises(EmailDeliveryError, match="403.*domain is not verified"):
+            send_email("a@example.com", "Hi", "<p>x</p>")
+
+
+def test_an_unreachable_resend_raises_a_delivery_error():
+    with patch("email_service.httpx.post", side_effect=httpx.ConnectError("down")):
+        with pytest.raises(EmailDeliveryError, match="Could not reach Resend"):
+            send_email("a@example.com", "Hi", "<p>x</p>")

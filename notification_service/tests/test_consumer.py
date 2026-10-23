@@ -1,9 +1,9 @@
 import json
-import smtplib
 from unittest.mock import MagicMock, patch
 
 import pytest
 from consumer import process_message
+from email_service import EmailDeliveryError
 from models import Base, NotificationEvent, NotificationLog, NotificationStatus
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -168,7 +168,7 @@ def test_process_proctoring_violation():
         db.close()
 
 
-def test_smtp_failure_acks_and_logs_failed():
+def test_email_failure_acks_and_logs_failed():
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 5
@@ -186,7 +186,7 @@ def test_smtp_failure_acks_and_logs_failed():
 
     with patch(
         "consumer.send_email",
-        side_effect=smtplib.SMTPException("SMTP Server Unreachable"),
+        side_effect=EmailDeliveryError("Resend Unreachable"),
     ):
         process_message(mock_ch, mock_method, None, body)
 
@@ -203,7 +203,7 @@ def test_smtp_failure_acks_and_logs_failed():
         )
         assert log is not None
         assert log.status == NotificationStatus.failed
-        assert "SMTP Server Unreachable" in log.error_message
+        assert "Resend Unreachable" in log.error_message
     finally:
         db.close()
 

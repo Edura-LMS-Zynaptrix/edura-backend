@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `notification_service`: email is now sent through the Resend API (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`) instead of SMTP; the `SMTP_*` settings are removed
+
 ### Added
 - `notification_service`: RabbitMQ consumer for OTP, payment, certificate, and violation email dispatch via SMTP (DDP-#20)
   - `consumer.py` — RabbitMQ worker consuming from `notification.queue` bound to exchange `edura.events` for routing keys `auth.otp-requested`, `payment.success`, `certificate.issued`, and `proctoring.violation`.

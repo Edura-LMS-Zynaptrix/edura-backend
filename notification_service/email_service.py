@@ -1,11 +1,9 @@
+import base64
 import logging
 import os
-import smtplib
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 
+import httpx
 from jinja2 import Environment, FileSystemLoader
 
 logger = logging.getLogger(__name__)
@@ -13,13 +11,16 @@ logger = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
 
-# Environment variables for SMTP
-SMTP_HOST = os.getenv("SMTP_HOST", "localhost")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 1025))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "noreply@edura.com")
-SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "false").lower() in ("true", "1", "yes")
+# Email goes out through Resend (https://resend.com), over its HTTPS API.
+RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com/emails")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+# Must be an address on a domain verified in Resend (or onboarding@resend.dev while testing).
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "Edura <onboarding@resend.dev>")
+RESEND_TIMEOUT_SECONDS = float(os.getenv("RESEND_TIMEOUT_SECONDS", "15"))
+
+
+class EmailDeliveryError(Exception):
+    """Resend did not accept the message (not configured, rejected, or unreachable)."""
 
 
 def render_email(template_name: str, context: dict) -> str:
@@ -34,42 +35,46 @@ def send_email(
     to_email: str, subject: str, html_body: str, attachments: list[dict] | None = None
 ) -> None:
     """
-    Dispatches an HTML email via SMTP based on environment configuration.
+    Sends an HTML email through the Resend API.
 
-    attachments: [{"filename": str, "data": bytes, "subtype": "pdf"}] (subtype optional).
+    attachments: [{"filename": str, "data": bytes}] (any extra keys are ignored).
+    Raises EmailDeliveryError when the message was not accepted.
     """
+    if not RESEND_API_KEY:
+        raise EmailDeliveryError("RESEND_API_KEY is not set")
+
+    payload: dict = {
+        "from": RESEND_FROM_EMAIL,
+        "to": [to_email],
+        "subject": subject,
+        "html": html_body,
+    }
     if attachments:
-        msg = MIMEMultipart("mixed")
-        body = MIMEMultipart("alternative")
-        body.attach(MIMEText(html_body, "html"))
-        msg.attach(body)
-        for item in attachments:
-            part = MIMEApplication(
-                item["data"], _subtype=item.get("subtype", "octet-stream")
-            )
-            part.add_header(
-                "Content-Disposition", "attachment", filename=item["filename"]
-            )
-            msg.attach(part)
-    else:
-        msg = MIMEMultipart("alternative")
-        msg.attach(MIMEText(html_body, "html"))
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM_EMAIL
-    msg["To"] = to_email
+        payload["attachments"] = [
+            {
+                "filename": item["filename"],
+                "content": base64.b64encode(item["data"]).decode("ascii"),
+            }
+            for item in attachments
+        ]
 
-    logger.info(f"Connecting to SMTP server at {SMTP_HOST}:{SMTP_PORT}...")
-    if SMTP_USE_TLS:
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10)
-        server.starttls()
-    else:
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10)
-
+    logger.info(f"Sending email '{subject}' to {to_email} via Resend...")
     try:
-        if SMTP_USER and SMTP_PASSWORD:
-            server.login(SMTP_USER, SMTP_PASSWORD)
+        response = httpx.post(
+            RESEND_API_URL,
+            json=payload,
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            timeout=RESEND_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise EmailDeliveryError(f"Could not reach Resend: {exc!r}") from exc
 
-        server.sendmail(SMTP_FROM_EMAIL, [to_email], msg.as_string())
-        logger.info(f"Successfully sent email '{subject}' to {to_email}")
-    finally:
-        server.quit()
+    if response.status_code >= 400:
+        try:
+            reason = response.json().get("message") or response.text
+        except ValueError:
+            reason = response.text
+        raise EmailDeliveryError(
+            f"Resend rejected the email ({response.status_code}): {reason}"
+        )
+    logger.info(f"Successfully sent email '{subject}' to {to_email}")

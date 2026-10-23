@@ -135,7 +135,7 @@ def process_message(  # noqa: C901 - one branch per event type
         # Render email content
         html_body = render_email(template_name, context)
 
-        # Send Email via SMTP
+        # Send the email through Resend
         try:
             send_email(
                 to_email=email,
@@ -161,9 +161,9 @@ def process_message(  # noqa: C901 - one branch per event type
             ch.basic_ack(delivery_tag=method.delivery_tag)
             logger.info(f"Successfully processed {routing_key} for {email}")
 
-        except Exception as smtp_err:
+        except Exception as send_err:
             logger.error(
-                f"SMTP delivery failed for {routing_key} to {email}: {smtp_err}"
+                f"Email delivery failed for {routing_key} to {email}: {send_err}"
             )
             db.rollback()
 
@@ -177,13 +177,13 @@ def process_message(  # noqa: C901 - one branch per event type
                 title=subject,
                 body=html_body,
                 reference_id=reference_id,
-                error_message=str(smtp_err),
+                error_message=str(send_err),
             )
             db.add(log_entry)
             db.commit()
 
             # The failure is recorded above. Requeueing would redeliver it
-            # immediately and forever while SMTP is down or unconfigured.
+            # immediately and forever while Resend is down or unconfigured.
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
     except Exception as e:
