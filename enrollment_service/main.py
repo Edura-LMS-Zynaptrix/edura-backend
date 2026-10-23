@@ -1,9 +1,20 @@
-import threading
 from contextlib import asynccontextmanager
 
 import consumer
+from access_events import announce_everything
+from database import SessionLocal
 from fastapi import FastAPI
 from router import router
+
+from shared import messaging
+
+
+def _resync() -> None:
+    db = SessionLocal()
+    try:
+        announce_everything(db)
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -29,9 +40,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"Column migration error: {e}", flush=True)
 
-    # Start RabbitMQ consumer in background thread on container startup
-    consumer_thread = threading.Thread(target=consumer.start_consumer, daemon=True)
-    consumer_thread.start()
+    # Listen for payments, course and user changes; tell the other services who can open what.
+    consumer.start_consumer()
+    messaging.resync_later(_resync)
     yield
 
 

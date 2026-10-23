@@ -23,6 +23,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from shared.replicas import (
+    define_replica_course,
+    define_replica_stream,
+    define_replica_user,
+)
+
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
@@ -154,3 +160,11 @@ class ClassEnrollment(Base):
             "user_id", "class_package_id", name="uq_class_enrollment_user_package"
         ),
     )
+
+
+# Copies of what other services announced: the catalogue (for class-package coverage),
+# students (for the admin pickers and names) and streams (for package names).
+# Written only by the event consumer.
+ReplicaCourse = define_replica_course(Base)
+ReplicaUser = define_replica_user(Base)
+ReplicaStream = define_replica_stream(Base)

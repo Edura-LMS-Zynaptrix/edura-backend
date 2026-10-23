@@ -8,14 +8,20 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-import httpx
-from models import Assessment, Badge, Submission, SubmissionStatus, UserBadge
+from events import announce_badge
+from models import (
+    Assessment,
+    Badge,
+    ReplicaUser,
+    Submission,
+    SubmissionStatus,
+    UserBadge,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth_service:8001")
 # Time-of-day badges use the students' local time (Sri Lanka, UTC+05:30).
 LOCAL_OFFSET = timedelta(minutes=int(os.getenv("BADGE_TZ_OFFSET_MINUTES", "330")))
 PASS_PERCENT = 85.0
@@ -104,16 +110,13 @@ def _local(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc) + LOCAL_OFFSET
 
 
-def _account_created_at(student_id: int) -> datetime | None:
-    try:
-        r = httpx.get(f"{AUTH_SERVICE_URL}/internal/users/{student_id}", timeout=5.0)
-        if r.status_code != 200:
-            return None
-        created = datetime.fromisoformat(r.json()["created_at"].replace("Z", "+00:00"))
-        return created if created.tzinfo else created.replace(tzinfo=timezone.utc)
-    except Exception as e:
-        logger.warning("Could not read account age for %s: %s", student_id, e)
+def _account_created_at(db: Session, student_id: int) -> datetime | None:
+    """When the account was made, from the local copy of users."""
+    user = db.get(ReplicaUser, student_id)
+    created = user.account_created_at if user else None
+    if created is None:
         return None
+    return created if created.tzinfo else created.replace(tzinfo=timezone.utc)
 
 
 def _award(db: Session, student_id: int, key: str, owned: set[int]) -> Badge | None:
@@ -127,6 +130,7 @@ def _award(db: Session, student_id: int, key: str, owned: set[int]) -> Badge | N
         db.rollback()
         return None
     owned.add(badge.id)
+    announce_badge(student_id, key, datetime.now(timezone.utc))
     return badge
 
 
@@ -211,7 +215,7 @@ def evaluate_after_attempt(  # noqa: C901 - one rule per badge
         _local(s.submitted_at).isocalendar()[:2] for s in history if s.submitted_at
     }
     if len(weeks_active) >= 4 and "junior_scholar" not in earned:
-        created = _account_created_at(student_id)
+        created = _account_created_at(db, student_id)
         if created and datetime.now(timezone.utc) - created >= timedelta(weeks=4):
             earned.append("junior_scholar")
 

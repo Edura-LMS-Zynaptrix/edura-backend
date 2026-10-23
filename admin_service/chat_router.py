@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException, status
 from models import ChatConversation, ChatMessage
+from people import display_names
 from schemas import (
     AdminChatReply,
     ChatConversationResponse,
@@ -18,7 +19,6 @@ from schemas import (
 )
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from user_client import display_names
 
 from shared.auth import get_optional_payload, require_role
 

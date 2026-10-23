@@ -9,3 +9,4 @@ redis
 pika
 httpx
 python-multipart>=0.0.9
+cloudinary>=1.40.0

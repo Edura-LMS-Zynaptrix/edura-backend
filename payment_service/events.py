@@ -1,47 +1,49 @@
-import json
-import logging
-import os
+"""Payment events: other services act on these, so they carry everything needed."""
 
-import pika
+from datetime import datetime, timezone
 
-logger = logging.getLogger(__name__)
-
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
-EXCHANGE_NAME = "edura.events"
-ROUTING_KEY_SUCCESS = "payment.success"
+from shared import events as ev
+from shared.messaging import publish
 
 
 def publish_payment_success(
-    student_id: int, course_id: int, order_id: str, amount: float
+    student_id: int,
+    course_id: int,
+    order_id: str,
+    amount: float,
+    payment_id: int | None = None,
+    paid_at: datetime | None = None,
 ):
-    """
-    Publishes payment.success event to edura.events exchange.
-    """
-    payload = {
-        "student_id": student_id,
-        "course_id": course_id,
-        "order_id": order_id,
-        "amount": amount,
-    }
-    try:
-        connection = pika.BlockingConnection(
-            pika.ConnectionParameters(
-                host=RABBITMQ_HOST, connection_attempts=3, retry_delay=2
-            )
-        )
-        channel = connection.channel()
-        channel.exchange_declare(
-            exchange=EXCHANGE_NAME, exchange_type="topic", durable=True
-        )
-        channel.basic_publish(
-            exchange=EXCHANGE_NAME,
-            routing_key=ROUTING_KEY_SUCCESS,
-            body=json.dumps(payload),
-            properties=pika.BasicProperties(delivery_mode=2),
-        )
-        connection.close()
-        logger.info(f"Published payment.success for order {order_id}")
-    except Exception as e:
-        logger.error(
-            f"Failed to publish payment.success event for order {order_id}: {e}"
-        )
+    """A payment went through (PayHere, an approved bank slip, or a free course)."""
+    publish(
+        ev.PAYMENT_SUCCESS,
+        {
+            "student_id": student_id,
+            "course_id": course_id,
+            "order_id": order_id,
+            "amount": amount,
+            "payment_id": payment_id,
+            "completed_at": (paid_at or datetime.now(timezone.utc)).isoformat(),
+        },
+    )
+
+
+def publish_receipt_uploaded(receipt_id: int, payment_id: int, student_id: int):
+    publish(
+        ev.PAYMENT_RECEIPT_UPLOADED,
+        {"receipt_id": receipt_id, "payment_id": payment_id, "student_id": student_id},
+    )
+
+
+def publish_receipt_reviewed(
+    receipt_id: int, student_id: int, status: str, reviewed_at: datetime | None
+):
+    publish(
+        ev.PAYMENT_RECEIPT_REVIEWED,
+        {
+            "receipt_id": receipt_id,
+            "student_id": student_id,
+            "status": status,
+            "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
+        },
+    )

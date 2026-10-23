@@ -10,7 +10,7 @@ import re
 import zipfile
 from datetime import datetime, timedelta, timezone
 
-from content_client import upload_image
+from images import upload_image
 from models import Assessment, AssessmentType, Question, QuestionType
 from sqlalchemy import func
 from sqlalchemy.orm import Session

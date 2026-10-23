@@ -26,6 +26,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from shared.replicas import define_replica_account
+
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
@@ -188,3 +190,8 @@ class WalletTransaction(Base):
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# What auth_service announced about each account (email, active flag). Read-only
+# here: only the event consumer writes it.
+ReplicaAccount = define_replica_account(Base)

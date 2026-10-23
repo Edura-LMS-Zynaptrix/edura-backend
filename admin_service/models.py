@@ -15,6 +15,8 @@ from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from shared.replicas import define_replica_user
+
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
@@ -138,3 +140,8 @@ class ChatMessage(Base):
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# What auth_service and user_service announced about each person (name, email).
+# Written only by the event consumer.
+ReplicaUser = define_replica_user(Base)

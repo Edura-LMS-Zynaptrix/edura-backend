@@ -1,10 +1,12 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from content_client import upload_receipt
-from course_client import get_course_price
 from database import get_db
-from events import publish_payment_success
+from events import (
+    publish_payment_success,
+    publish_receipt_reviewed,
+    publish_receipt_uploaded,
+)
 from fastapi import (
     APIRouter,
     Depends,
@@ -15,6 +17,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.concurrency import run_in_threadpool
 from models import (
     BankAccount,
     Payment,
@@ -22,6 +25,7 @@ from models import (
     PaymentReceipt,
     PaymentStatus,
     ReceiptStatus,
+    ReplicaCourse,
 )
 from schemas import (
     BankAccountCreate,
@@ -46,6 +50,7 @@ from utils import (
     verify_payhere_signature,
 )
 
+from shared import media
 from shared.auth import require_role
 
 router = APIRouter()
@@ -128,9 +133,10 @@ async def free_enroll(
     """
     student_id = int(payload["sub"])
 
-    price = await get_course_price(body.course_id)
-    if price is None:
+    course = db.get(ReplicaCourse, body.course_id)
+    if course is None:
         raise HTTPException(status_code=404, detail={"error": "COURSE_NOT_FOUND"})
+    price = float(course.price or 0)
     if price != 0:
         raise HTTPException(
             status_code=400,
@@ -172,6 +178,8 @@ async def free_enroll(
         course_id=body.course_id,
         order_id=f"FREE-{payment.id}",
         amount=0,
+        payment_id=payment.id,
+        paid_at=payment.paid_at,
     )
 
     return FreeEnrollResponse(
@@ -244,6 +252,8 @@ async def payhere_webhook(
             course_id=payment.course_id,
             order_id=order_id,
             amount=float(payment.amount),
+            payment_id=payment.id,
+            paid_at=payment.paid_at,
         )
         return {"status": "SUCCESS", "message": "Payment confirmed and event published"}
     else:
@@ -294,11 +304,18 @@ async def upload_manual_receipt(
             },
         )
 
-    # Uploaded to Cloudinary via content_service, which owns the integration
+    # The file's own bytes must match what it claims to be, then it goes
+    # straight to Cloudinary; only the URL and public_id are kept here.
     receipt_filename = (
         f"{student_id}_{course_id}_{uuid.uuid4().hex[:8]}_{file.filename}"
     )
-    receipt_url, receipt_public_id = await upload_receipt(content, receipt_filename)
+    try:
+        media.check(content, ALLOWED_RECEIPT_MIME_TYPES, MAX_RECEIPT_SIZE, "Receipt")
+        receipt_public_id, receipt_url = await run_in_threadpool(
+            media.upload, content, receipt_filename, media.RECEIPT_FOLDER
+        )
+    except media.MediaError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail())
 
     # Create Payment record with MANUAL method and PENDING status
     payment = Payment(
@@ -324,6 +341,7 @@ async def upload_manual_receipt(
     db.add(receipt)
     db.commit()
     db.refresh(receipt)
+    publish_receipt_uploaded(receipt.id, payment.id, student_id)
 
     return ReceiptUploadResponse(
         payment_id=payment.id,
@@ -433,6 +451,8 @@ async def verify_receipt(
             course_id=payment.course_id,
             order_id=f"MANUAL-{payment.id}",
             amount=float(payment.amount),
+            payment_id=payment.id,
+            paid_at=payment.paid_at,
         )
     else:
         receipt.receipt_status = ReceiptStatus.REJECTED
@@ -442,6 +462,12 @@ async def verify_receipt(
         db.refresh(receipt)
         db.refresh(payment)
 
+    publish_receipt_reviewed(
+        receipt.id,
+        receipt.student_id,
+        receipt.receipt_status.value,
+        receipt.reviewed_at,
+    )
     return ReceiptAdminResponse(
         id=receipt.id,
         payment_id=receipt.payment_id,

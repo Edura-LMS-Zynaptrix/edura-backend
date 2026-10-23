@@ -1,10 +1,12 @@
-import secrets
-import string
-
-from auth_client import get_all_auth_users, get_auth_user
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from models import GradeSubject, ProfileRole, Stream, UserProfile
+from models import GradeSubject, ProfileRole, ReplicaAccount, Stream, UserProfile
+from profile_service import (
+    announce_profile,
+    announce_profile_deleted,
+    announce_stream,
+    create_profile,
+)
 from referrals import apply_code as apply_referral_code
 from referrals import bind_referral, find_referrer
 from referrals import events_for as referral_events_for
@@ -13,7 +15,6 @@ from schemas import (
     GradeSubjectCreate,
     GradeSubjectResponse,
     GradeSubjectUpdate,
-    InternalProfileCreateRequest,
     PaginatedUsersResponse,
     ReferralApplyRequest,
     RoleStatsResponse,
@@ -25,10 +26,11 @@ from schemas import (
     UserProfileResponse,
     UserProfileUpdate,
 )
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from shared import events as ev
 from shared.auth import require_role
+from shared.messaging import publish
 
 router = APIRouter()
 
@@ -63,20 +65,6 @@ def _to_response(
     )
 
 
-def _generate_referral_code(db: Session, first_name: str) -> str:
-    """Short, human-shareable code like `JOHN4F2A` — collision-checked
-    against the (unique) referral_code column with a handful of retries."""
-    prefix = "".join(ch for ch in first_name.upper() if ch.isalpha())[:4] or "USER"
-    for _ in range(10):
-        suffix = "".join(
-            secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4)
-        )
-        code = f"{prefix}{suffix}"
-        if not db.query(UserProfile).filter(UserProfile.referral_code == code).first():
-            return code
-    return secrets.token_hex(6).upper()
-
-
 @router.get("/", response_model=PaginatedUsersResponse)
 async def list_users(
     page: int = Query(1, ge=1),
@@ -86,8 +74,8 @@ async def list_users(
     payload: dict = Depends(require_role(["admin"])),
     db: Session = Depends(get_db),
 ):
-    """Admin: paginated list of all user profiles, enriched with the
-    is_active/email fields that only auth_service's User row actually owns."""
+    """Admin: paginated list of all user profiles, with the email and active flag
+    from this service's copy of each account (kept current by auth events)."""
     q = db.query(UserProfile)
     if role:
         try:
@@ -104,15 +92,20 @@ async def list_users(
     offset = (page - 1) * page_size
     profiles = q.order_by(UserProfile.id.desc()).offset(offset).limit(page_size).all()
 
-    auth_users = await get_all_auth_users()
+    accounts = {
+        a.user_id: a
+        for a in db.query(ReplicaAccount).filter(
+            ReplicaAccount.user_id.in_([p.user_id for p in profiles])
+        )
+    }
     items = []
     for p in profiles:
-        auth_row = auth_users.get(p.user_id)
+        account = accounts.get(p.user_id)
         items.append(
             _to_response(
                 p,
-                email=auth_row["email"] if auth_row else None,
-                is_active=auth_row["is_active"] if auth_row else None,
+                email=account.email if account else None,
+                is_active=account.is_active if account else None,
             )
         )
 
@@ -149,99 +142,8 @@ async def create_own_profile(
             },
         )
 
-    # An unrecognised code is ignored rather than blocking registration.
-    referrer = find_referrer(db, body.referral_code)
-
-    profile = UserProfile(
-        user_id=requester_id,
-        role=ProfileRole(requester_role),
-        first_name=body.first_name,
-        last_name=body.last_name,
-        mobile_no=body.mobile_no,
-        date_of_birth=body.date_of_birth,
-        bio=body.bio,
-        avatar_url=body.avatar_url,
-        avatar_public_id=body.avatar_public_id,
-        school=body.school,
-        district=body.district,
-        grade=body.grade,
-        stream_id=body.stream_id,
-        nic_number=body.nic_number,
-        selected_subjects=body.selected_subjects,
-        referral_code=_generate_referral_code(db, body.first_name),
-    )
-    db.add(profile)
-    if referrer:
-        bind_referral(db, profile, referrer)
-    db.commit()
-    db.refresh(profile)
-
-    email = payload.get("email")
-    return _to_response(profile, email=email)
-
-
-@router.post(
-    "/internal/create-profile",
-    response_model=UserProfileResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_profile_internal(
-    body: InternalProfileCreateRequest, db: Session = Depends(get_db)
-):
-    """
-    Unauthenticated, service-to-service only (blocked at the gateway). Called
-    by auth_service when it creates an account itself: an admin made by
-    another admin, a first-time Google sign-in (seeded with the Google name
-    and photo; the student adds academic details on complete-profile), or an
-    email sign-up (the whole registration form, so no login is needed first).
-    """
-    existing = db.query(UserProfile).filter(UserProfile.user_id == body.user_id).first()
-    if existing:
-        return _to_response(existing)
-
-    try:
-        role = ProfileRole(body.role)
-    except ValueError:
-        raise HTTPException(status_code=422, detail={"error": "INVALID_ROLE"})
-
-    # An unrecognised referral code is ignored rather than blocking sign-up.
-    referrer = find_referrer(db, body.referral_code)
-
-    profile = UserProfile(
-        user_id=body.user_id,
-        role=role,
-        first_name=body.first_name,
-        last_name=body.last_name,
-        mobile_no=body.mobile_no,
-        date_of_birth=body.date_of_birth,
-        bio=body.bio,
-        avatar_url=body.avatar_url,
-        avatar_public_id=body.avatar_public_id,
-        school=body.school,
-        district=body.district,
-        grade=body.grade,
-        stream_id=body.stream_id,
-        nic_number=body.nic_number,
-        selected_subjects=body.selected_subjects,
-        referral_code=_generate_referral_code(db, body.first_name),
-    )
-    db.add(profile)
-    if referrer:
-        bind_referral(db, profile, referrer)
-    db.commit()
-    db.refresh(profile)
-    return _to_response(profile)
-
-
-@router.delete("/internal/profiles/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_profile_internal(user_id: int, db: Session = Depends(get_db)):
-    """
-    Service-to-service only (blocked at the gateway). Undoes profile creation
-    when auth_service has to roll a sign-up back, so a profile never outlives
-    its account. Quiet when there is nothing to remove.
-    """
-    db.query(UserProfile).filter(UserProfile.user_id == user_id).delete()
-    db.commit()
+    profile, _ = create_profile(db, requester_id, requester_role, body)
+    return _to_response(profile, email=payload.get("email"))
 
 
 # ── Streams & Subjects reference data ────────────────────────────────────────
@@ -271,6 +173,7 @@ async def create_stream(
     db.add(stream)
     db.commit()
     db.refresh(stream)
+    announce_stream(stream)
     return stream
 
 
@@ -288,6 +191,7 @@ async def update_stream(
         setattr(stream, field, value)
     db.commit()
     db.refresh(stream)
+    announce_stream(stream)
     return stream
 
 
@@ -302,6 +206,7 @@ async def delete_stream(
         raise HTTPException(status_code=404, detail={"error": "STREAM_NOT_FOUND"})
     db.delete(stream)
     db.commit()
+    publish(ev.USER_STREAM_DELETED, {"id": stream_id})
 
 
 @router.get("/grade-subjects", response_model=list[GradeSubjectResponse])
@@ -432,165 +337,6 @@ async def referral_apply(
     return apply_referral_code(db, _own_profile(payload, db), body.referral_code)
 
 
-@router.get("/internal/students")
-async def students_internal(
-    grades: str | None = Query(
-        None, description="Comma-separated grades; omit for all"
-    ),
-    search: str | None = Query(None, max_length=100),
-    limit: int = Query(100, ge=1, le=500),
-    db: Session = Depends(get_db),
-):
-    """Service-to-service only (blocked at the gateway): student picker for admin access grants."""
-    q = db.query(UserProfile).filter(UserProfile.role == ProfileRole.student)
-    if grades:
-        try:
-            wanted = [int(g) for g in grades.split(",") if g.strip()]
-        except ValueError:
-            raise HTTPException(status_code=422, detail={"error": "INVALID_GRADES"})
-        q = q.filter(UserProfile.grade.in_(wanted))
-    if search and search.strip():
-        term = f"%{search.strip()}%"
-        q = q.filter(
-            (UserProfile.first_name.ilike(term))
-            | (UserProfile.last_name.ilike(term))
-            | (UserProfile.school.ilike(term))
-        )
-    return [
-        {
-            "user_id": str(p.user_id),
-            "full_name": f"{p.first_name} {p.last_name}".strip(),
-            "grade": p.grade,
-            "district": p.district,
-            "school": p.school,
-        }
-        for p in q.order_by(UserProfile.first_name, UserProfile.last_name)
-        .limit(limit)
-        .all()
-    ]
-
-
-@router.get("/internal/profiles/{user_id}")
-def profile_internal(user_id: int, db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): a profile for reports."""
-    p = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-    if not p:
-        raise HTTPException(status_code=404, detail={"error": "USER_NOT_FOUND"})
-    return {
-        "user_id": p.user_id,
-        "role": p.role.value,
-        "full_name": f"{p.first_name} {p.last_name}".strip(),
-        "grade": p.grade,
-        "school": p.school,
-        "district": p.district,
-        "mobile_no": p.mobile_no,
-    }
-
-
-@router.get("/internal/profiles")
-def profiles_internal(
-    ids: str = Query(..., description="Comma-separated auth user ids"),
-    db: Session = Depends(get_db),
-):
-    """Service-to-service only (blocked at the gateway): leaderboard details for many users."""
-    try:
-        wanted = [int(x) for x in ids.split(",") if x.strip()][:500]
-    except ValueError:
-        raise HTTPException(status_code=422, detail={"error": "INVALID_IDS"})
-    return [
-        {
-            "user_id": p.user_id,
-            "role": p.role.value,
-            "full_name": f"{p.first_name} {p.last_name}".strip(),
-            "school": p.school,
-            "district": p.district,
-            "grade": p.grade,
-        }
-        for p in db.query(UserProfile).filter(UserProfile.user_id.in_(wanted))
-    ]
-
-
-@router.get("/internal/names")
-async def profile_names_internal(
-    ids: str = Query(..., description="Comma-separated auth user ids"),
-    db: Session = Depends(get_db),
-):
-    """Service-to-service only (blocked at the gateway): {user_id: display name}."""
-    try:
-        wanted = [int(x) for x in ids.split(",") if x.strip()][:500]
-    except ValueError:
-        raise HTTPException(status_code=422, detail={"error": "INVALID_IDS"})
-    rows = (
-        db.query(UserProfile.user_id, UserProfile.first_name, UserProfile.last_name)
-        .filter(UserProfile.user_id.in_(wanted))
-        .all()
-    )
-    return {str(uid): f"{first} {last}".strip() for uid, first, last in rows}
-
-
-@router.get("/internal/student-breakdown")
-def student_breakdown_internal(db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): student counts for the admin dashboard."""
-    is_student = UserProfile.role == ProfileRole.student
-    by_grade = (
-        db.query(UserProfile.grade, func.count(UserProfile.id))
-        .filter(is_student, UserProfile.grade.isnot(None))
-        .group_by(UserProfile.grade)
-        .order_by(UserProfile.grade)
-        .all()
-    )
-    by_district = (
-        db.query(UserProfile.district, func.count(UserProfile.id))
-        .filter(
-            is_student, UserProfile.district.isnot(None), UserProfile.district != ""
-        )
-        .group_by(UserProfile.district)
-        .order_by(func.count(UserProfile.id).desc(), UserProfile.district)
-        .limit(10)
-        .all()
-    )
-    recent = (
-        db.query(UserProfile)
-        .filter(is_student)
-        .order_by(UserProfile.created_at.desc(), UserProfile.id.desc())
-        .limit(5)
-        .all()
-    )
-    return {
-        "total_students": db.query(func.count(UserProfile.id))
-        .filter(is_student)
-        .scalar()
-        or 0,
-        "by_grade": [{"grade": g, "count": c} for g, c in by_grade],
-        "by_district": [{"district": d, "count": c} for d, c in by_district],
-        "recent_students": [
-            {
-                "user_id": p.user_id,
-                "full_name": f"{p.first_name} {p.last_name}".strip(),
-                "district": p.district,
-                "created_at": p.created_at.isoformat() if p.created_at else None,
-            }
-            for p in recent
-        ],
-    }
-
-
-@router.get("/internal/stats", response_model=RoleStatsResponse)
-async def get_role_stats_internal(db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): analytics_service's public homepage stats."""
-    return RoleStatsResponse(
-        total_students=db.query(UserProfile)
-        .filter(UserProfile.role == ProfileRole.student)
-        .count(),
-        total_teachers=db.query(UserProfile)
-        .filter(UserProfile.role == ProfileRole.teacher)
-        .count(),
-        total_admins=db.query(UserProfile)
-        .filter(UserProfile.role == ProfileRole.admin)
-        .count(),
-    )
-
-
 @router.get("/stats", response_model=RoleStatsResponse)
 async def get_role_stats(
     payload: dict = Depends(require_role(["admin"])),
@@ -631,17 +377,15 @@ async def get_user(
     if not profile:
         raise HTTPException(status_code=404, detail={"error": "USER_NOT_FOUND"})
 
-    # Include email from JWT when the requester is viewing their own record;
-    # for any other record (an admin viewing someone else's), ask
-    # auth_service for both email and is_active.
-    if requester_id == user_id:
-        email = payload.get("email")
-        is_active = None
-    else:
-        auth_row = await get_auth_user(user_id)
-        email = auth_row["email"] if auth_row else None
-        is_active = auth_row["is_active"] if auth_row else None
-    return _to_response(profile, email=email, is_active=is_active)
+    # Email and active flag come from this service's copy of the account,
+    # kept current by the events auth_service publishes.
+    account = db.get(ReplicaAccount, user_id)
+    email = payload.get("email") if requester_id == user_id else None
+    return _to_response(
+        profile,
+        email=email or (account.email if account else None),
+        is_active=account.is_active if account else None,
+    )
 
 
 @router.put("/{user_id}", response_model=UserProfileResponse)
@@ -676,6 +420,7 @@ async def update_user(
 
     db.commit()
     db.refresh(profile)
+    announce_profile(profile)
     return _to_response(profile)
 
 
@@ -694,6 +439,7 @@ async def update_user_role(
     profile.role = ProfileRole(body.role)
     db.commit()
     db.refresh(profile)
+    announce_profile(profile)
     return _to_response(profile)
 
 
@@ -703,10 +449,11 @@ async def delete_user(
     payload: dict = Depends(require_role(["admin"])),
     db: Session = Depends(get_db),
 ):
-    """Admin only: soft-delete a user profile. Auth service is notified via RabbitMQ (integration epic)."""
+    """Admin only: delete a user profile. Other services hear about it through an event."""
     profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail={"error": "USER_NOT_FOUND"})
 
     db.delete(profile)
     db.commit()
+    announce_profile_deleted(user_id)

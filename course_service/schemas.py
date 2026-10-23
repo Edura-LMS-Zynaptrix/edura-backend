@@ -107,11 +107,6 @@ class CourseResponse(BaseModel):
         )
 
 
-class CourseOwnerResponse(BaseModel):
-    course_id: int
-    instructor_id: int
-
-
 class ModuleCreate(BaseModel):
     title: str
     description: Optional[str] = None

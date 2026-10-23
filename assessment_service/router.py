@@ -4,8 +4,9 @@ import json
 import logging
 import random
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
+from access import is_enrolled
 from badges import evaluate_after_attempt
 from bulk_import import (
     apply_question_images,
@@ -14,10 +15,13 @@ from bulk_import import (
     safe_zip,
     template_zip,
 )
-from course_client import get_course_instructor_id, get_course_titles
+from catalog import get_course_instructor_id, get_course_titles
 from database import get_db
-from enrollment_client import is_enrolled
-from events import publish_assessment_graded
+from events import (
+    announce_assessment,
+    announce_assessment_deleted,
+    publish_assessment_graded,
+)
 from fastapi import (
     APIRouter,
     Depends,
@@ -40,6 +44,7 @@ from models import (
     ViolationLog,
     ViolationType,
 )
+from people import get_profiles
 from rankings import rank_rows
 from redis_client import get_redis_client
 from schemas import (
@@ -68,7 +73,6 @@ from schemas import (
 )
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from user_client import get_profiles
 
 from shared.auth import get_optional_payload, require_role
 
@@ -332,202 +336,6 @@ async def list_assessments(
     assessments = q.order_by(Assessment.position, Assessment.id).all()
     counts = _question_counts([a.id for a in assessments], db)
     return [_to_response(a, counts.get(a.id, 0)) for a in assessments]
-
-
-def _int_list(raw: str | None) -> list[int]:
-    try:
-        return [int(x) for x in (raw or "").split(",") if x.strip()][:500]
-    except ValueError:
-        raise HTTPException(status_code=422, detail={"error": "INVALID_IDS"})
-
-
-@router.get("/internal/students/{student_id}/exam-progress")
-def student_exam_progress_internal(
-    student_id: int,
-    course_ids: str | None = Query(
-        None, description="Courses the student can open in full"
-    ),
-    lesson_ids: str | None = Query(
-        None, description="Single lessons granted on their own"
-    ),
-    db: Session = Depends(get_db),
-):
-    """Service-to-service only: every published exam the student can take, with their graded attempts."""
-    courses, lessons = _int_list(course_ids), _int_list(lesson_ids)
-    if not courses and not lessons:
-        return []
-    q = db.query(Assessment).filter(Assessment.is_published.is_(True))
-    if courses and lessons:
-        q = q.filter(
-            Assessment.course_id.in_(courses) | Assessment.module_id.in_(lessons)
-        )
-    elif courses:
-        q = q.filter(Assessment.course_id.in_(courses))
-    else:
-        q = q.filter(Assessment.module_id.in_(lessons))
-    exams = q.order_by(Assessment.course_id, Assessment.position, Assessment.id).all()
-    if not exams:
-        return []
-    ids = [e.id for e in exams]
-    questions_by_exam: dict[int, list[Question]] = {}
-    for question in db.query(Question).filter(Question.assessment_id.in_(ids)):
-        questions_by_exam.setdefault(question.assessment_id, []).append(question)
-    attempts_by_exam: dict[int, list[dict]] = {}
-    for sub in (
-        db.query(Submission)
-        .filter(
-            Submission.student_id == student_id,
-            Submission.assessment_id.in_(ids),
-            Submission.status == SubmissionStatus.graded,
-        )
-        .order_by(Submission.submitted_at, Submission.id)
-    ):
-        questions = questions_by_exam.get(sub.assessment_id, [])
-        attempts_by_exam.setdefault(sub.assessment_id, []).append(
-            {
-                "id": sub.id,
-                "score_pct": round(float(sub.score or 0)),
-                "marks_obtained": _correct_count(questions, _answers_of(sub)),
-                "total_questions": len(questions),
-                "time_seconds": _time_taken(sub),
-                "submitted_at": (
-                    sub.submitted_at.isoformat() if sub.submitted_at else None
-                ),
-            }
-        )
-    return [
-        {
-            "id": e.id,
-            "title": e.title,
-            "course_id": e.course_id,
-            "module_id": e.module_id,
-            "order_number": e.position or 0,
-            "attempts": attempts_by_exam.get(e.id, []),
-        }
-        for e in exams
-    ]
-
-
-@router.get("/internal/students/{student_id}/badge-count")
-def student_badge_count_internal(student_id: int, db: Session = Depends(get_db)):
-    return {
-        "count": db.query(UserBadge).filter(UserBadge.student_id == student_id).count()
-    }
-
-
-@router.get("/internal/courses/{course_id}/first-attempts")
-def course_first_attempts_internal(course_id: int, db: Session = Depends(get_db)):
-    """Service-to-service only: each student's FIRST graded attempt per exam (struggle analysis)."""
-    exams = db.query(Assessment).filter(Assessment.course_id == course_id).all()
-    if not exams:
-        return {"exams": [], "attempts": []}
-    first: dict[tuple[int, int], Submission] = {}
-    for sub in (
-        db.query(Submission)
-        .filter(
-            Submission.assessment_id.in_([e.id for e in exams]),
-            Submission.status == SubmissionStatus.graded,
-        )
-        .order_by(Submission.submitted_at, Submission.id)
-    ):
-        first.setdefault((sub.student_id, sub.assessment_id), sub)
-    return {
-        "exams": [
-            {"id": e.id, "title": e.title, "module_id": e.module_id} for e in exams
-        ],
-        "attempts": [
-            {"student_id": sid, "exam_id": eid, "score_pct": float(sub.score or 0)}
-            for (sid, eid), sub in first.items()
-        ],
-    }
-
-
-SL_TIME = timezone(timedelta(hours=5, minutes=30))
-
-
-@router.get("/internal/admin-stats")
-def assessment_admin_stats_internal(db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): exam figures for the admin dashboard."""
-    graded = Submission.status == SubmissionStatus.graded
-    months: dict[tuple[int, int], int] = {}
-    for (when,) in db.query(Submission.submitted_at).filter(
-        graded, Submission.submitted_at.isnot(None)
-    ):
-        local = (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(
-            SL_TIME
-        )
-        months[(local.year, local.month)] = months.get((local.year, local.month), 0) + 1
-
-    top = (
-        db.query(
-            Submission.assessment_id,
-            func.count(Submission.id),
-            func.avg(Submission.score),
-        )
-        .filter(graded)
-        .group_by(Submission.assessment_id)
-        .order_by(func.count(Submission.id).desc())
-        .limit(8)
-        .all()
-    )
-    titles = (
-        {
-            a.id: a
-            for a in db.query(Assessment)
-            .filter(Assessment.id.in_([row[0] for row in top]))
-            .all()
-        }
-        if top
-        else {}
-    )
-    recent = (
-        db.query(Assessment)
-        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
-        .limit(5)
-        .all()
-    )
-    return {
-        "published_exams": db.query(Assessment)
-        .filter(Assessment.is_published.is_(True))
-        .count(),
-        "graded_attempts": db.query(Submission).filter(graded).count(),
-        "attempts_by_month": [
-            {"year": y, "month": m, "count": months[(y, m)]}
-            for (y, m) in sorted(months)[-12:]
-        ],
-        "top_exams": [
-            {
-                "exam_id": exam_id,
-                "title": titles[exam_id].title,
-                "course_id": titles[exam_id].course_id,
-                "attempt_count": count,
-                "avg_score": round(float(avg or 0), 1),
-            }
-            for exam_id, count, avg in top
-            if exam_id in titles
-        ],
-        "recent_exams": [
-            {
-                "title": a.title,
-                "course_id": a.course_id,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-            }
-            for a in recent
-        ],
-    }
-
-
-@router.get("/internal/stats")
-async def assessment_stats_internal(db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): counts for the public homepage."""
-    return {
-        "published_exams": db.query(Assessment)
-        .filter(Assessment.is_published.is_(True))
-        .count(),
-        "graded_attempts": db.query(Submission)
-        .filter(Submission.status == SubmissionStatus.graded)
-        .count(),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -940,6 +748,7 @@ async def create_assessment(
     db.add(assessment)
     db.commit()
     db.refresh(assessment)
+    announce_assessment(assessment)
     return _to_response(assessment, 0)
 
 
@@ -968,6 +777,8 @@ async def delete_module_assessments(
             synchronize_session=False
         )
         db.commit()
+        for assessment_id in ids:
+            announce_assessment_deleted(assessment_id)
 
 
 @router.put("/{assessment_id}", response_model=AssessmentResponse)
@@ -992,6 +803,7 @@ async def update_assessment(
 
     db.commit()
     db.refresh(assessment)
+    announce_assessment(assessment)
     return _to_response(assessment, db=db)
 
 
@@ -1009,6 +821,7 @@ async def delete_assessment(
     db.query(Question).filter(Question.assessment_id == assessment_id).delete()
     db.delete(assessment)
     db.commit()
+    announce_assessment_deleted(assessment_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1279,7 +1092,12 @@ async def bulk_import_exams(
     )
     data = await _read_zip(file)
     try:
-        return await bulk_import(db, course_id, module_id, data)
+        result = await bulk_import(db, course_id, module_id, data)
+        for exam_id in [d["exam_id"] for d in result["details"]]:
+            exam = db.get(Assessment, int(exam_id))
+            if exam is not None:
+                announce_assessment(exam)
+        return result
     except ValueError as e:
         db.rollback()
         raise HTTPException(
@@ -1597,19 +1415,20 @@ async def submit_assessment(  # noqa: C901 - grading, session cleanup, badges an
     redis_c.delete(session_key)
     redis_c.delete(active_key)
 
-    # Publish RabbitMQ event
+    time_taken = _time_taken(submission)
     publish_assessment_graded(
         student_id=student_id,
         assessment_id=assessment_id,
         score=score,
         passed=passed,
+        course_id=assessment.course_id,
+        module_id=assessment.module_id,
+        submission_id=submission.id,
+        marks_obtained=correct_count,
+        total_questions=total_questions,
+        time_seconds=time_taken,
+        submitted_at=submission.submitted_at,
     )
-
-    time_taken = 0
-    if submission.started_at and submission.submitted_at:
-        time_taken = int(
-            (submission.submitted_at - submission.started_at).total_seconds()
-        )
 
     overall_rank, district_rank = await _my_ranks(assessment_id, student_id, db)
 

@@ -1,12 +1,13 @@
 import logging
-import threading
 
+import event_consumer
 from database import Base, SessionLocal, engine
 from fastapi import FastAPI
 from models import GradeSubject, Stream
-from referral_consumer import start_referral_consumer
 from router import router
 from sqlalchemy import text
+
+from shared import messaging
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +99,9 @@ def on_startup():
 
     _seed_reference_data()
 
-    # Credits referrers when enrollment_service reports a first enrollment.
-    threading.Thread(target=start_referral_consumer, daemon=True).start()
+    # Listens for new accounts (to create their profile) and enrollments (referral credit).
+    event_consumer.start()
+    messaging.resync_later(event_consumer.resync)
 
 
 @app.get("/health")

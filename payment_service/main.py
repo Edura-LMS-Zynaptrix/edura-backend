@@ -1,5 +1,6 @@
 import logging
 
+import event_consumer
 from database import Base, engine
 from fastapi import FastAPI
 from router import router
@@ -37,6 +38,8 @@ def on_startup():
         logger.info("Payment service column migrations applied.")
     except Exception as e:
         logger.error(f"Error applying column migrations on startup: {e}")
+
+    event_consumer.start()
 
 
 @app.get("/health")

@@ -6,7 +6,7 @@ Courses stand in for ExamBuddy's subjects: Edura courses carry no separate subje
 import asyncio
 from datetime import datetime, timezone
 
-import service_clients as clients
+import readmodel as clients
 
 
 def _when(timestamp: str | None) -> datetime:

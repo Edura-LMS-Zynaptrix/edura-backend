@@ -438,14 +438,15 @@ def test_resend_verification(monkeypatch):
     )
     monkeypatch.setattr("services.redis_client", MemoryRedisClient())
     client.post("/resend-verification", json={"email": "resend@edura.com"})
-    assert len(PUBLISHED) == 1
+    emails = [k for k, _ in PUBLISHED if k == "auth.email-verification-requested"]
+    assert len(emails) == 1
 
 
-def test_register_with_profile_creates_both(monkeypatch):
-    from unittest.mock import AsyncMock
+def _events(key: str) -> list[dict]:
+    return [payload for k, payload in PUBLISHED if k == key]
 
-    create = AsyncMock(return_value=(True, 201, {}))
-    monkeypatch.setattr("router.create_registration_profile", create)
+
+def test_register_announces_the_account_with_its_profile():
     resp = client.post(
         "/register",
         json={
@@ -454,55 +455,76 @@ def test_register_with_profile_creates_both(monkeypatch):
             "profile": {
                 "first_name": "Nimal",
                 "last_name": "Perera",
+                "mobile_no": "077 123 4567",
                 "grade": 11,
                 "school": "Royal",
+                "district": "Colombo",
             },
         },
     )
     assert resp.status_code == 200
-    user_id, role, profile = create.call_args.args
-    assert user_id == resp.json()["id"] and role == "student"
-    assert profile == {
-        "first_name": "Nimal",
-        "last_name": "Perera",
-        "grade": 11,
-        "school": "Royal",
-    }
-    assert PUBLISHED[-1][0] == "auth.email-verification-requested"
+
+    (registered,) = _events("auth.user-registered")
+    assert registered["user_id"] == resp.json()["id"]
+    assert registered["email"] == "full@edura.com"
+    assert registered["role"] == "student" and registered["is_email_verified"] is False
+    # user_service builds the profile from this: validated and normalised here
+    assert registered["profile"]["first_name"] == "Nimal"
+    assert registered["profile"]["mobile_no"] == "0771234567"
+    assert registered["profile"]["grade"] == 11
+    assert _events("auth.email-verification-requested")
 
 
-def test_register_rolls_back_when_the_profile_is_refused(monkeypatch):
-    from unittest.mock import AsyncMock
+def test_register_without_a_profile_announces_the_account_only():
+    client.post(
+        "/register", json={"email": "bare@edura.com", "password": "Password@123"}
+    )
+    (registered,) = _events("auth.user-registered")
+    assert registered["profile"] is None
 
+
+def test_register_rejects_an_invalid_profile_before_announcing_anything():
     body = {
-        "email": "rollback@edura.com",
+        "email": "badprofile@edura.com",
         "password": "Password@123",
-        "profile": {"first_name": "A"},
+        "profile": {"first_name": "A", "last_name": "B", "mobile_no": "not-a-number"},
     }
-    monkeypatch.setattr(
-        "router.create_registration_profile",
-        AsyncMock(return_value=(False, 422, "bad phone")),
-    )
-    rejected = client.post("/register", json=body)
-    assert rejected.status_code == 422
-    assert rejected.json()["detail"]["error"] == "PROFILE_REJECTED"
-    assert not [e for e in PUBLISHED if e[1].get("email") == "rollback@edura.com"]
+    assert client.post("/register", json=body).status_code == 422
+    assert PUBLISHED == []
 
-    removed = AsyncMock()
-    monkeypatch.setattr("router.delete_profile_internal", removed)
-    monkeypatch.setattr(
-        "router.create_registration_profile",
-        AsyncMock(return_value=(False, 503, "down")),
-    )
-    assert client.post("/register", json=body).status_code == 502
-    # a profile may have been saved even though the reply was lost: it is removed too
-    removed.assert_awaited_once()
-
-    # the failed attempts left nothing behind, so the address can still be used
-    monkeypatch.setattr(
-        "router.create_registration_profile", AsyncMock(return_value=(True, 201, {}))
-    )
+    # nothing was created, so the same address is still free
+    body["profile"]["mobile_no"] = "0771234567"
     assert client.post("/register", json=body).status_code == 200
+
+
+def test_register_does_not_depend_on_any_other_service(monkeypatch):
+    """The broker being down must not stop an account being created."""
+    monkeypatch.setattr("router.publish_event", lambda key, payload: False)
+    resp = client.post(
+        "/register", json={"email": "offline@edura.com", "password": "Password@123"}
+    )
+    assert resp.status_code == 200
+
+
+def test_account_changes_are_announced():
+    client.post(
+        "/register", json={"email": "changes@edura.com", "password": "Password@123"}
+    )
+    user_id = _events("auth.user-registered")[0]["user_id"]
+
+    client.post("/verify-email", json={"token": _verification_token()})
+    verified = _events("auth.account-updated")[-1]
+    assert verified["user_id"] == user_id and verified["is_email_verified"] is True
+
+    admin = _token_for_admin()
+    client.put(f"/users/{user_id}/status", json={"is_active": False}, headers=admin)
+    deactivated = _events("auth.account-updated")[-1]
+    assert deactivated["is_active"] is False
+
+
+def _token_for_admin() -> dict:
+    token = TokenService.create_access_token(user_id=999, role="ADMIN")
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_google_sign_in_verifies_and_drops_an_unverified_password(monkeypatch):
@@ -576,3 +598,43 @@ def test_password_reset_proves_the_address():
         ).status_code
         == 200
     )
+
+
+def test_new_google_account_is_announced_with_the_google_name_and_photo(monkeypatch):
+    info = {
+        "google_id": "g-new",
+        "email": "fresh@edura.com",
+        "full_name": "Fresh Student",
+        "picture": "https://example.com/p.png",
+        "email_verified": True,
+    }
+    monkeypatch.setattr(
+        "router.GoogleAuthService.verify_access_token", lambda token: info
+    )
+    assert client.post("/google", json={"access_token": "x"}).status_code == 200
+
+    (registered,) = _events("auth.user-registered")
+    assert registered["email"] == "fresh@edura.com"
+    assert registered["is_email_verified"] is True
+    assert registered["profile"] == {
+        "first_name": "Fresh",
+        "last_name": "Student",
+        "avatar_url": "https://example.com/p.png",
+    }
+
+
+def test_admin_created_by_admin_is_announced_with_a_profile():
+    resp = client.post(
+        "/admin/create-admin",
+        json={
+            "email": "newadmin@edura.com",
+            "password": "Password@123",
+            "first_name": "New",
+            "last_name": "Admin",
+        },
+        headers=_token_for_admin(),
+    )
+    assert resp.status_code == 201
+    (registered,) = _events("auth.user-registered")
+    assert registered["role"] == "admin" and registered["is_email_verified"] is True
+    assert registered["profile"] == {"first_name": "New", "last_name": "Admin"}

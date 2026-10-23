@@ -4,8 +4,8 @@ import base64
 
 import jwt
 import pytest
+import readmodel as service_clients
 import router as router_module
-import service_clients
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from progress import build_course_struggle, build_student_progress

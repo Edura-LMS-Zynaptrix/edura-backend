@@ -258,81 +258,196 @@ class TestDeleteUser:
 
 
 # ---------------------------------------------------------------------------
-# POST /internal/create-profile — profile created by auth_service at sign-up
+# Events: user_service builds the profile when auth_service announces a sign-up
 # ---------------------------------------------------------------------------
 
 
-class TestInternalCreateProfile:
-    def test_email_signup_stores_the_whole_form_and_applies_the_referral(
-        self, client, db, student
+@pytest.fixture()
+def published(monkeypatch):
+    """Capture what this service announces (there is no broker in tests)."""
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "profile_service.publish",
+        lambda key, payload: events.append((key, payload)) or True,
+    )
+    monkeypatch.setattr(
+        "router.publish", lambda key, payload: events.append((key, payload)) or True
+    )
+    return events
+
+
+def _registered(user_id: int, **profile) -> dict:
+    return {
+        "user_id": user_id,
+        "email": f"user{user_id}@example.com",
+        "role": "student",
+        "is_active": True,
+        "is_email_verified": False,
+        "created_at": "2026-10-20T08:00:00+00:00",
+        "profile": profile or None,
+    }
+
+
+class TestSignupEvents:
+    def test_registration_builds_the_profile_and_stores_the_account(
+        self, db, published
     ):
-        student.referral_code = "ALICE123"
-        db.commit()
-        r = client.post(
-            "/internal/create-profile",
-            json={
-                "user_id": 777,
-                "role": "student",
-                "first_name": "Nimal",
-                "last_name": "Perera",
-                "mobile_no": "0771234567",
-                "school": "Royal College",
-                "district": "Colombo",
-                "grade": 11,
-                "selected_subjects": ["Maths", "Science"],
-                "referral_code": "ALICE123",
-            },
+        from event_consumer import handle
+        from models import ReplicaAccount
+
+        handle(
+            "auth.user-registered",
+            _registered(
+                777,
+                first_name="Nimal",
+                last_name="Perera",
+                mobile_no="0771234567",
+                school="Royal College",
+                district="Colombo",
+                grade=11,
+                selected_subjects=["Maths", "Science"],
+            ),
         )
-        assert r.status_code == 201
-        body = r.json()
-        assert (body["school"], body["district"], body["grade"]) == (
+
+        profile = db.query(UserProfile).filter(UserProfile.user_id == 777).one()
+        assert (profile.school, profile.district, profile.grade) == (
             "Royal College",
             "Colombo",
             11,
         )
-        assert body["selected_subjects"] == ["Maths", "Science"]
-        assert body["referral_code"]
-        created = db.query(UserProfile).filter(UserProfile.user_id == 777).one()
-        assert created.referred_by_user_id == student.user_id
+        assert profile.selected_subjects == ["Maths", "Science"]
+        assert profile.referral_code
+        account = db.get(ReplicaAccount, 777)
+        assert account.email == "user777@example.com" and account.is_active is True
+
+        # the profile is announced for every service that keeps a copy
+        key, payload = published[-1]
+        assert key == "user.profile-upserted"
+        assert payload["user_id"] == 777 and payload["full_name"] == "Nimal Perera"
 
         db.query(UserProfile).filter(UserProfile.user_id == 777).delete()
+        db.query(ReplicaAccount).filter(ReplicaAccount.user_id == 777).delete()
         db.commit()
 
-    def test_invalid_details_are_refused(self, client):
-        r = client.post(
-            "/internal/create-profile",
-            json={
-                "user_id": 778,
-                "role": "student",
-                "first_name": "Bad",
-                "last_name": "Phone",
-                "mobile_no": "not-a-number",
-            },
-        )
-        assert r.status_code == 422
+    def test_a_repeated_event_does_not_create_a_second_profile(self, db, published):
+        from event_consumer import handle
 
-    def test_name_only_profiles_still_work(self, client, db):
-        r = client.post(
-            "/internal/create-profile",
-            json={"user_id": 779, "role": "admin", "first_name": "A", "last_name": ""},
+        event = _registered(778, first_name="Once", last_name="Only")
+        handle("auth.user-registered", event)
+        handle("auth.user-registered", event)
+
+        assert db.query(UserProfile).filter(UserProfile.user_id == 778).count() == 1
+        assert len([k for k, _ in published if k == "user.profile-upserted"]) == 1
+
+        db.query(UserProfile).filter(UserProfile.user_id == 778).delete()
+        db.commit()
+
+    def test_referral_code_from_the_signup_is_applied(self, db, student, published):
+        from event_consumer import handle
+
+        student.referral_code = "ALICE123"
+        db.commit()
+        handle(
+            "auth.user-registered",
+            _registered(
+                779, first_name="Kamal", last_name="Silva", referral_code="ALICE123"
+            ),
         )
-        assert r.status_code == 201
+        created = db.query(UserProfile).filter(UserProfile.user_id == 779).one()
+        assert created.referred_by_user_id == student.user_id
+
         db.query(UserProfile).filter(UserProfile.user_id == 779).delete()
         db.commit()
 
-    def test_rolled_back_signup_removes_its_profile(self, client, db):
-        client.post(
-            "/internal/create-profile",
-            json={
-                "user_id": 780,
-                "role": "student",
-                "first_name": "Gone",
-                "last_name": "Soon",
+    def test_an_admin_created_without_a_form_still_gets_a_profile(self, db, published):
+        from event_consumer import handle
+
+        event = _registered(780, first_name="New", last_name="Admin")
+        event["role"] = "admin"
+        handle("auth.user-registered", event)
+        profile = db.query(UserProfile).filter(UserProfile.user_id == 780).one()
+        assert profile.role == ProfileRole.admin
+
+        db.query(UserProfile).filter(UserProfile.user_id == 780).delete()
+        db.commit()
+
+    def test_account_changes_update_the_listing(
+        self, client, db, student, admin, published
+    ):
+        from event_consumer import handle
+
+        handle("auth.user-registered", _registered(student.user_id))
+        handle(
+            "auth.account-updated",
+            {
+                "user_id": student.user_id,
+                "email": "alice@example.com",
+                "is_active": False,
             },
         )
-        assert db.query(UserProfile).filter(UserProfile.user_id == 780).count() == 1
+        r = client.get("/", headers=_auth(999, "admin"))
+        row = next(i for i in r.json()["items"] if i["id"] == student.user_id)
+        assert row["email"] == "alice@example.com" and row["is_active"] is False
 
-        assert client.delete("/internal/profiles/780").status_code == 204
-        assert db.query(UserProfile).filter(UserProfile.user_id == 780).count() == 0
-        # nothing to remove is not an error
-        assert client.delete("/internal/profiles/780").status_code == 204
+    def test_enrollment_credits_the_referrer_once_but_not_for_manual_grants(
+        self, db, student, published, monkeypatch
+    ):
+        import event_consumer
+
+        credited = []
+        monkeypatch.setattr(
+            event_consumer,
+            "credit_on_enrollment",
+            lambda db, sid: credited.append(sid) or True,
+        )
+        event_consumer.handle(
+            "enrollment.activated", {"student_id": 5, "source": "manual"}
+        )
+        assert credited == []
+        event_consumer.handle(
+            "enrollment.activated", {"student_id": 5, "source": "payment"}
+        )
+        assert credited == [5]
+
+
+class TestProfileAnnouncements:
+    def test_updating_and_deleting_a_profile_is_announced(
+        self, client, student, admin, published
+    ):
+        r = client.put("/101", json={"bio": "Hello"}, headers=_auth(101, "student"))
+        assert r.status_code == 200
+        assert published[-1][0] == "user.profile-upserted"
+
+        r = client.delete("/101", headers=_auth(999, "admin"))
+        assert r.status_code == 204
+        assert published[-1] == ("user.profile-deleted", {"user_id": 101})
+
+    def test_streams_are_announced(self, client, admin, published):
+        r = client.post(
+            "/streams",
+            json={"name": "Announce Test", "subjects": ["Maths"]},
+            headers=_auth(999, "admin"),
+        )
+        assert r.status_code == 201
+        key, payload = published[-1]
+        assert key == "user.stream-upserted" and payload["name"] == "Announce Test"
+
+        stream_id = r.json()["id"]
+        client.delete(f"/streams/{stream_id}", headers=_auth(999, "admin"))
+        assert published[-1] == ("user.stream-deleted", {"id": stream_id})
+
+
+class TestNoDirectCalls:
+    def test_the_old_internal_endpoints_are_gone(self, client):
+        for path in (
+            "/internal/students",
+            "/internal/names?ids=1",
+            "/internal/profiles",
+            "/internal/stats",
+            "/internal/student-breakdown",
+        ):
+            assert client.get(path).status_code in (404, 401, 403, 422), path
+        assert client.post("/internal/create-profile", json={}).status_code in (
+            404,
+            405,
+        )

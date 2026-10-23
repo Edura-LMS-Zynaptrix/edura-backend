@@ -6,10 +6,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Base, engine
+from database import Base, SessionLocal, engine
 from fastapi import FastAPI
-from router import router
+from models import User
+from router import announce_account, router
 from sqlalchemy import text
+
+from shared import messaging
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,19 @@ def on_startup():
         logger.info("Auth service column migrations applied.")
     except Exception as e:
         logger.error(f"Error applying column migrations on startup: {e}")
+
+    # Other services keep their own copy of each account; re-announce them all so
+    # a service that was added later (or whose copy was lost) catches up.
+    messaging.resync_later(_announce_all_accounts)
+
+
+def _announce_all_accounts() -> None:
+    db = SessionLocal()
+    try:
+        for user in db.query(User).all():
+            announce_account(user)
+    finally:
+        db.close()
 
 
 @app.get("/health")
