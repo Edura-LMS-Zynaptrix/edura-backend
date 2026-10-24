@@ -355,4 +355,26 @@ def test_process_password_reset_sends_the_link():
         }
     )
 
-    
+    with patch("consumer.send_email") as mock_send:
+        process_message(mock_ch, mock_method, None, body)
+
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs["to_email"] == "forgetful@example.com"
+        assert kwargs["subject"] == "Reset your Edura password"
+        assert "reset-password?token=xyz.123" in kwargs["html_body"]
+        assert "60 minutes" in kwargs["html_body"]
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=12)
+
+    db = TestingSessionLocal()
+    try:
+        log = (
+            db.query(NotificationLog)
+            .filter_by(recipient_email="forgetful@example.com")
+            .first()
+        )
+        assert log is not None
+        assert log.event_type == NotificationEvent.password_reset_requested
+        assert log.status == NotificationStatus.sent
+        assert log.recipient_id == 77
+    finally:
+        db.close()
