@@ -8,4 +8,5 @@ python-multipart>=0.0.9
 PyJWT[crypto]>=2.8.0
 redis
 pika
-httpx
+httpx
+cloudinary>=1.40.0

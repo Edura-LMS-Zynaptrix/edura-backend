@@ -1,7 +1,6 @@
 import bcrypt
 from config import settings
 from database import SessionLocal
-from events import publish_event
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from models import User, UserRole
 from schemas import (
@@ -10,7 +9,6 @@ from schemas import (
     CurrentUserResponse,
     ForgotPasswordRequest,
     GoogleLoginRequest,
-    InternalUserResponse,
     LoginRequest,
     OtpRequest,
     OtpVerifyRequest,
@@ -33,13 +31,10 @@ from services import (
     TokenService,
 )
 from sqlalchemy.orm import Session
-from user_client import (
-    create_profile_internal,
-    create_registration_profile,
-    delete_profile_internal,
-)
 
+from shared import events as ev
 from shared.auth import require_role
+from shared.messaging import publish as publish_event
 
 router = APIRouter(tags=["auth"])
 
@@ -70,8 +65,42 @@ def _send_verification_email(user: User) -> None:
     )
 
 
+def announce_account(user: User) -> None:
+    """Tell the other services this account changed (they keep their own copy of it)."""
+    publish_event(
+        ev.AUTH_ACCOUNT_UPDATED,
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "role": (
+                user.role.value if isinstance(user.role, UserRole) else str(user.role)
+            ),
+            "is_active": user.is_active,
+            "is_email_verified": user.is_email_verified,
+        },
+    )
+
+
+def _announce_registration(user: User, profile: dict | None) -> None:
+    """A new account exists. user_service stores the profile that came with it."""
+    publish_event(
+        ev.AUTH_USER_REGISTERED,
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "role": (
+                user.role.value if isinstance(user.role, UserRole) else str(user.role)
+            ),
+            "is_active": user.is_active,
+            "is_email_verified": user.is_email_verified,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "profile": profile,
+        },
+    )
+
+
 @router.post("/register", response_model=UserResponse)
-async def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
+def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == req.email).first()
     if existing:
         raise HTTPException(
@@ -99,37 +128,12 @@ async def register(req: UserRegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    if req.profile:
-        # The account and its profile are created together. If the profile is
-        # refused, the account is removed so the email can be used again.
-        ok, status_code, detail = await create_registration_profile(
-            user.id,
-            role.value if isinstance(role, UserRole) else str(role),
-            req.profile.model_dump(exclude_none=True),
-        )
-        if not ok:
-            if status_code != 422:
-                # The reply may have been lost after the profile was saved.
-                await delete_profile_internal(user.id)
-            db.delete(user)
-            db.commit()
-            raise HTTPException(
-                status_code=422 if status_code == 422 else 502,
-                detail={
-                    "error": (
-                        "PROFILE_REJECTED"
-                        if status_code == 422
-                        else "PROFILE_SERVICE_UNAVAILABLE"
-                    ),
-                    "message": (
-                        "Please check your details and try again."
-                        if status_code == 422
-                        else "We could not finish creating your account. Please try again shortly."
-                    ),
-                    "details": detail if status_code == 422 else None,
-                },
-            )
-
+    # user_service creates the profile when it receives this event. The form was
+    # already validated by the request schema, so there is nothing to roll back.
+    _announce_registration(
+        user,
+        req.profile.model_dump(mode="json", exclude_none=True) if req.profile else None,
+    )
     _send_verification_email(user)
     return user
 
@@ -151,6 +155,7 @@ def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
     if not user.is_email_verified:
         user.is_email_verified = True
         db.commit()
+        announce_account(user)
     return {"message": "Email verified. You can now log in."}
 
 
@@ -169,30 +174,8 @@ def resend_verification(req: ResendVerificationRequest, db: Session = Depends(ge
     return {"message": _VERIFICATION_REQUESTED_MESSAGE}
 
 
-@router.get("/internal/users", response_model=list[InternalUserResponse])
-def list_users_internal(db: Session = Depends(get_db)):
-    """
-    Unauthenticated, service-to-service only (mirrors course_service's
-    /owner and content_service's /internal/receipt-upload). Lets user_service
-    enrich its admin-facing profile listings with is_active/email — fields
-    that only exist on this service's User row, not on a UserProfile.
-    """
-    return db.query(User).all()
-
-
-@router.get("/internal/users/{user_id}", response_model=InternalUserResponse)
-def get_user_internal(user_id: int, db: Session = Depends(get_db)):
-    """Singular counterpart to /internal/users — used where only one
-    account's is_active/email is needed (e.g. user_service's GET /{user_id})
-    instead of pulling the whole table for a single lookup."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail={"error": "USER_NOT_FOUND"})
-    return user
-
-
 @router.post("/admin/create-admin", response_model=UserResponse, status_code=201)
-async def create_admin(
+def create_admin(
     req: CreateAdminRequest,
     payload: dict = Depends(require_role(["admin"])),
     db: Session = Depends(get_db),
@@ -226,8 +209,9 @@ async def create_admin(
     db.commit()
     db.refresh(user)
 
-    await create_profile_internal(user.id, "admin", req.first_name, req.last_name)
-
+    _announce_registration(
+        user, {"first_name": req.first_name, "last_name": req.last_name}
+    )
     return user
 
 
@@ -244,6 +228,7 @@ def update_user_status(
 
     user.is_active = body.is_active
     db.commit()
+    announce_account(user)
     return {"user_id": user.id, "is_active": user.is_active}
 
 
@@ -415,6 +400,7 @@ async def google_login(
     user = db.query(User).filter(User.google_id == google_id).first()
     if not user:
         user = db.query(User).filter(User.email == email).first()
+    verified_now = False
 
     if user:
         if not user.google_id:
@@ -428,7 +414,10 @@ async def google_login(
             user.is_email_verified = True
             user.hashed_password = None
             user.auth_provider = "google"
+            verified_now = True
         db.commit()
+        if verified_now:
+            announce_account(user)
     else:
         user = User(
             email=email,
@@ -447,12 +436,13 @@ async def google_login(
         first_name, _, last_name = (
             (google_info.get("full_name") or "").strip().partition(" ")
         )
-        await create_profile_internal(
-            user.id,
-            "student",
-            first_name or email.split("@")[0],
-            last_name.strip(),
-            avatar_url=google_info.get("picture") or None,
+        _announce_registration(
+            user,
+            {
+                "first_name": first_name or email.split("@")[0],
+                "last_name": last_name.strip(),
+                "avatar_url": google_info.get("picture") or None,
+            },
         )
 
     if not user.is_active:
@@ -614,8 +604,11 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
         req.new_password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
     # Following the emailed link shows the person controls this address.
+    newly_verified = not user.is_email_verified
     user.is_email_verified = True
     db.commit()
+    if newly_verified:
+        announce_account(user)
 
     # Anyone holding an old session is signed out.
     TokenService.revoke_all_for_user(db, user.id)

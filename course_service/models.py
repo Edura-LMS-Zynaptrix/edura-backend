@@ -23,6 +23,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from shared.replicas import define_replica_access
+
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
@@ -229,3 +231,8 @@ class CheckpointQuestion(Base):
     order_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     __table_args__ = (Index("ix_checkpoint_questions_checkpoint_id", "checkpoint_id"),)
+
+
+# What enrollment_service announced each student can open. Written only by the
+# event consumer and read by the content gate.
+ReplicaAccess = define_replica_access(Base)

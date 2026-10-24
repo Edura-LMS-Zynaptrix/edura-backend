@@ -16,6 +16,8 @@ from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, Numeric, String,
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from shared.replicas import define_replica_course
+
 # ---------------------------------------------------------------------------
 # ENUMs  (AC2 from issue #06 — must be Python Enum, enforced at column level)
 # ---------------------------------------------------------------------------
@@ -159,3 +161,8 @@ class BankAccount(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+# What course_service announced about each course (price, status). Written only
+# by the event consumer; a free-enrollment is checked against it.
+ReplicaCourse = define_replica_course(Base)

@@ -2,9 +2,15 @@ import csv
 import io
 import re
 
+from access import is_enrolled
 from database import get_db
-from enrollment_client import is_enrolled
-from events import publish_course_published
+from events import (
+    announce_course,
+    announce_course_deleted,
+    announce_module,
+    announce_module_deleted,
+    publish_course_published,
+)
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from models import (
     CheckpointQuestion,
@@ -22,7 +28,6 @@ from schemas import (
     CheckpointResponse,
     CheckpointUpdate,
     CourseCreate,
-    CourseOwnerResponse,
     CourseResponse,
     CourseUpdate,
     CourseWithModulesResponse,
@@ -252,6 +257,7 @@ async def create_course(
     db.add(course)
     db.commit()
     db.refresh(course)
+    announce_course(course)
     return CourseResponse.from_orm_course(course)
 
 
@@ -328,76 +334,6 @@ async def list_courses(
     )
 
 
-@router.get("/internal/published", response_model=list[CourseResponse])
-async def list_published_internal(db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): every published course, for aggregate stats."""
-    courses = (
-        db.query(Course)
-        .filter(Course.status == CourseStatus.PUBLISHED)
-        .order_by(Course.id)
-        .all()
-    )
-    return [CourseResponse.from_orm_course(c) for c in courses]
-
-
-@router.get("/internal/titles")
-def course_titles_internal(
-    ids: str = Query(..., description="Comma-separated course ids"),
-    db: Session = Depends(get_db),
-):
-    """Service-to-service only (blocked at the gateway): {id: title} for display labels."""
-    try:
-        wanted = [int(x) for x in ids.split(",") if x.strip()][:200]
-    except ValueError:
-        raise HTTPException(status_code=422, detail={"error": "INVALID_IDS"})
-    rows = db.query(Course.id, Course.title).filter(Course.id.in_(wanted)).all()
-    return {str(course_id): title for course_id, title in rows}
-
-
-@router.get("/internal/courses/{course_id}")
-async def course_info_internal(course_id: int, db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): the facts other services gate on."""
-    course = _get_course_or_404(course_id, db)
-    return {
-        "id": course.id,
-        "title": course.title,
-        "grade": course.grade,
-        "stream_ids": course.stream_ids or [],
-        "course_type": (
-            course.course_type.value
-            if hasattr(course.course_type, "value")
-            else course.course_type
-        ),
-        "status": (
-            course.status.value if hasattr(course.status, "value") else course.status
-        ),
-    }
-
-
-@router.get("/internal/courses/{course_id}/modules")
-def course_modules_internal(course_id: int, db: Session = Depends(get_db)):
-    """Service-to-service only (blocked at the gateway): the lessons of a course, active or not."""
-    _get_course_or_404(course_id, db)
-    return [
-        {"id": m.id, "title": m.title, "order": m.position}
-        for m in db.query(Module)
-        .filter(Module.course_id == course_id)
-        .order_by(Module.position, Module.id)
-    ]
-
-
-@router.get("/{course_id}/owner", response_model=CourseOwnerResponse)
-async def get_course_owner(course_id: int, db: Session = Depends(get_db)):
-    """
-    Internal, unauthenticated lookup for other services (e.g. assessment_service)
-    to verify course ownership before letting a teacher manage that course's
-    assessments — mirrors enrollment_service's open internal /enrollments
-    lookup used the same way by content_service.
-    """
-    course = _get_course_or_404(course_id, db)
-    return CourseOwnerResponse(course_id=course.id, instructor_id=course.instructor_id)
-
-
 @router.get("/{course_id}", response_model=CourseWithModulesResponse)
 async def get_course(
     course_id: int,
@@ -466,6 +402,7 @@ async def update_course(
 
     db.commit()
     db.refresh(course)
+    announce_course(course)
 
     if publish_event:
         publish_course_published(course.id, course.instructor_id, course.title)
@@ -487,9 +424,15 @@ async def delete_course(
     _delete_checkpoints(db, VideoCheckpoint.course_id == course_id)
     db.query(Material).filter(Material.course_id == course_id).delete()
     db.query(Lesson).filter(Lesson.course_id == course_id).delete()
+    module_ids = [
+        m for (m,) in db.query(Module.id).filter(Module.course_id == course_id)
+    ]
     db.query(Module).filter(Module.course_id == course_id).delete()
     db.delete(course)
     db.commit()
+    for module_id in module_ids:
+        announce_module_deleted(module_id)
+    announce_course_deleted(course_id)
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +464,7 @@ async def create_module(
     db.add(module)
     db.commit()
     db.refresh(module)
+    announce_module(module)
     return ModuleResponse.from_orm_module(module)
 
 
@@ -559,6 +503,8 @@ async def update_module(
 
     db.commit()
     db.refresh(module)
+    announce_module(module)
+    db.refresh(module)
     return ModuleResponse.from_orm_module(module)
 
 
@@ -585,6 +531,7 @@ async def delete_module(
     db.query(Lesson).filter(Lesson.module_id == module_id).delete()
     db.delete(module)
     db.commit()
+    announce_module_deleted(module_id)
 
 
 # ---------------------------------------------------------------------------

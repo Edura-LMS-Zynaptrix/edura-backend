@@ -1,22 +1,23 @@
 from datetime import datetime, timezone
 
+from access_events import announce_access, announce_access_many, announce_enrollment
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.concurrency import run_in_threadpool
 from models import (
     ClassEnrollment,
     ClassPackage,
     Enrollment,
     EnrollmentStatus,
     LessonAccess,
+    ReplicaStream,
+    ReplicaUser,
 )
 from package_access import (
-    active_packages,
+    allowed_student_grades,
     course_access,
+    get_course,
     grant_package,
-    has_access,
     lesson_grants,
-    package_covers,
 )
 from schemas import (
     AccessEnrolledStudent,
@@ -27,15 +28,6 @@ from schemas import (
     ClassPackageUpdate,
     EnrollmentResponse,
 )
-from service_clients import (
-    allowed_student_grades,
-    course_info,
-    names,
-    published_courses,
-    streams,
-    students,
-)
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from shared.auth import get_optional_payload, require_role
@@ -43,16 +35,43 @@ from shared.auth import get_optional_payload, require_role
 router = APIRouter()
 
 
-@router.get("/internal/course-counts")
-def course_enrollment_counts_internal(db: Session = Depends(get_db)):
-    """Service-to-service only (not routed by the gateway): active enrollments per course."""
-    rows = (
-        db.query(Enrollment.course_id, func.count(Enrollment.id))
-        .filter(Enrollment.status == EnrollmentStatus.ACTIVE)
-        .group_by(Enrollment.course_id)
-        .all()
+def stream_names(db: Session) -> dict[int, str]:
+    """Active streams {id: name}, from this service's copy."""
+    return {
+        s.id: s.name
+        for s in db.query(ReplicaStream).filter(ReplicaStream.is_active.is_(True))
+    }
+
+
+def display_names(db: Session, user_ids) -> dict[int, str]:
+    ids = list(set(user_ids))
+    if not ids:
+        return {}
+    rows = db.query(ReplicaUser).filter(ReplicaUser.user_id.in_(ids)).all()
+    return {r.user_id: r.display_name for r in rows if r.display_name}
+
+
+def eligible_students(
+    db: Session, grades: list[int] | None, search: str | None, limit: int = 100
+) -> list[dict]:
+    q = db.query(ReplicaUser).filter(
+        ReplicaUser.role == "student", ReplicaUser.full_name.isnot(None)
     )
-    return [{"course_id": course_id, "count": count} for course_id, count in rows]
+    if grades:
+        q = q.filter(ReplicaUser.grade.in_(grades))
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        q = q.filter(ReplicaUser.full_name.ilike(term) | ReplicaUser.school.ilike(term))
+    return [
+        {
+            "user_id": str(u.user_id),
+            "full_name": u.full_name,
+            "grade": u.grade,
+            "district": u.district,
+            "school": u.school,
+        }
+        for u in q.order_by(ReplicaUser.full_name).limit(limit)
+    ]
 
 
 @router.get("/api/enrollments/me", response_model=list[EnrollmentResponse])
@@ -74,48 +93,6 @@ def list_my_enrollments(
     ] + [EnrollmentResponse.from_lesson_access(g) for g in grants.all()]
 
 
-def _stored_access(db: Session, student_id: int):
-    courses = {
-        cid
-        for (cid,) in db.query(Enrollment.course_id).filter(
-            Enrollment.student_id == student_id,
-            Enrollment.status == EnrollmentStatus.ACTIVE,
-        )
-    }
-    grants = (
-        db.query(LessonAccess.course_id, LessonAccess.module_id)
-        .filter(LessonAccess.student_id == student_id)
-        .all()
-    )
-    return courses, active_packages(db, student_id), grants
-
-
-@router.get("/internal/students/{student_id}/accessible")
-async def accessible_internal(student_id: int, db: Session = Depends(get_db)):
-    """Service-to-service only: whole courses the student can open, plus lessons granted on their own."""
-    # The queries run off the event loop so concurrent callers aren't serialized behind them.
-    courses, packages, grants = await run_in_threadpool(_stored_access, db, student_id)
-    if packages:
-        for course in await published_courses():
-            if any(package_covers(p.grade, p.stream_id, course) for p in packages):
-                courses.add(course["id"])
-    lessons = [
-        module_id for (course_id, module_id) in grants if course_id not in courses
-    ]
-    return {"course_ids": sorted(courses), "lesson_ids": sorted(lessons)}
-
-
-@router.get("/internal/access")
-async def access_check_internal(
-    student_id: int = Query(...),
-    course_id: int = Query(...),
-    module_id: int | None = Query(None),
-    db: Session = Depends(get_db),
-):
-    """Service-to-service only (not routed by the gateway): may this student open this course / lesson?"""
-    return {"has_access": await has_access(db, student_id, course_id, module_id)}
-
-
 @router.get("/api/enrollments/me/access")
 async def my_course_access(
     course_id: int = Query(...),
@@ -124,7 +101,7 @@ async def my_course_access(
 ):
     """What the caller can open in one course: everything, or just some lessons."""
     student_id = int(payload["sub"])
-    whole_course, via = await course_access(db, student_id, course_id)
+    whole_course, via = course_access(db, student_id, course_id)
     return {
         "course": whole_course,
         "via": via,
@@ -186,7 +163,7 @@ async def list_class_packages(
             )
     packages = q.order_by(ClassPackage.grade, ClassPackage.name).all()
     enrolled = _active_package_ids(db, int(payload["sub"])) if payload else set()
-    names_by_stream = await streams()
+    names_by_stream = stream_names(db)
     return [_serialize_package(p, names_by_stream, enrolled) for p in packages]
 
 
@@ -223,6 +200,7 @@ def enroll_free_class_package(
     enrollment = grant_package(db, user_id, package_id)
     db.commit()
     db.refresh(enrollment)
+    announce_access(db, user_id)
     return {
         "id": str(enrollment.id),
         "class_package_id": str(enrollment.class_package_id),
@@ -247,7 +225,7 @@ async def my_class_enrollments(
         .order_by(ClassEnrollment.enrolled_at.desc())
         .all()
     )
-    names_by_stream = await streams()
+    names_by_stream = stream_names(db)
     return [
         {
             "id": str(e.id),
@@ -287,7 +265,7 @@ async def admin_list_class_packages(
         q = q.filter(ClassPackage.stream_id == stream_id)
     if is_active is not None:
         q = q.filter(ClassPackage.is_active.is_(is_active))
-    names_by_stream = await streams()
+    names_by_stream = stream_names(db)
     return [
         _serialize_package(p, names_by_stream)
         for p in q.order_by(ClassPackage.grade, ClassPackage.name).all()
@@ -304,7 +282,7 @@ async def admin_create_class_package(
     db.add(pkg)
     db.commit()
     db.refresh(pkg)
-    return _serialize_package(pkg, await streams())
+    return _serialize_package(pkg, stream_names(db))
 
 
 # Static path: must stay above the /{package_id} routes.
@@ -333,7 +311,7 @@ async def admin_auto_generate_class_packages(
                 )
             )
             created.append(f"Grade {grade}")
-    for stream_id, stream_name in (await streams()).items():
+    for stream_id, stream_name in stream_names(db).items():
         for grade in (12, 13):
             if (
                 not db.query(ClassPackage.id)
@@ -370,7 +348,17 @@ async def admin_update_class_package(
         setattr(pkg, field, value)
     db.commit()
     db.refresh(pkg)
-    return _serialize_package(pkg, await streams())
+    # A change to the package (active, grade, stream) changes what its holders can open.
+    announce_access_many(
+        db,
+        [
+            u
+            for (u,) in db.query(ClassEnrollment.user_id).filter(
+                ClassEnrollment.class_package_id == pkg.id
+            )
+        ],
+    )
+    return _serialize_package(pkg, stream_names(db))
 
 
 @router.delete("/api/enrollments/admin/class-packages/{package_id}")
@@ -380,11 +368,18 @@ def admin_delete_class_package(
     db: Session = Depends(get_db),
 ):
     pkg = _get_package_or_404(package_id, db)
+    holders = [
+        u
+        for (u,) in db.query(ClassEnrollment.user_id).filter(
+            ClassEnrollment.class_package_id == pkg.id
+        )
+    ]
     db.query(ClassEnrollment).filter(
         ClassEnrollment.class_package_id == pkg.id
     ).delete()
     db.delete(pkg)
     db.commit()
+    announce_access_many(db, holders)
     return {"status": "success"}
 
 
@@ -403,7 +398,7 @@ async def admin_list_class_enrollments(
     if class_package_id is not None:
         q = q.filter(ClassEnrollment.class_package_id == class_package_id)
     rows = q.order_by(ClassEnrollment.enrolled_at.desc()).all()
-    display = await names([e.user_id for e, _ in rows])
+    display = display_names(db, [e.user_id for e, _ in rows])
     return [
         {
             "id": str(e.id),
@@ -433,6 +428,7 @@ def admin_grant_class_enrollment(
     )
     db.commit()
     db.refresh(enrollment)
+    announce_access(db, body.user_id)
     return {
         "id": str(enrollment.id),
         "user_id": str(enrollment.user_id),
@@ -449,6 +445,11 @@ def admin_revoke_class_enrollment(
     _: dict = Depends(require_role(["admin"])),
     db: Session = Depends(get_db),
 ):
+    holder = (
+        db.query(ClassEnrollment.user_id)
+        .filter(ClassEnrollment.id == enrollment_id)
+        .scalar()
+    )
     deleted = (
         db.query(ClassEnrollment).filter(ClassEnrollment.id == enrollment_id).delete()
     )
@@ -457,6 +458,7 @@ def admin_revoke_class_enrollment(
             status_code=404, detail={"error": "CLASS_ENROLLMENT_NOT_FOUND"}
         )
     db.commit()
+    announce_access(db, holder)
     return {"status": "success"}
 
 
@@ -492,7 +494,7 @@ async def admin_enrolled_students(
     db: Session = Depends(get_db),
 ):
     granted = _granted_ids(db, course_id, module_id)
-    display = await names(list(granted))
+    display = display_names(db, granted)
     return sorted(
         (
             AccessEnrolledStudent(
@@ -517,11 +519,13 @@ async def admin_eligible_students(
     db: Session = Depends(get_db),
 ):
     """Students in the course's grade band who don't have this access yet."""
-    course = await course_info(course_id)
+    course = get_course(db, course_id)
     if course is None:
         raise HTTPException(status_code=404, detail={"error": "COURSE_NOT_FOUND"})
     granted = _granted_ids(db, course_id, module_id)
-    candidates = await students(allowed_student_grades(course.get("grade")), search)
+    candidates = eligible_students(
+        db, allowed_student_grades(course.get("grade")), search
+    )
     return [AccessStudent(**c) for c in candidates if int(c["user_id"]) not in granted]
 
 
@@ -531,11 +535,12 @@ async def admin_grant_access(
     payload: dict = Depends(require_role(_ADMIN)),
     db: Session = Depends(get_db),
 ):
-    if await course_info(body.course_id) is None:
+    if get_course(db, body.course_id) is None:
         raise HTTPException(status_code=404, detail={"error": "COURSE_NOT_FOUND"})
     admin_id = int(payload["sub"])
     now = datetime.now(timezone.utc)
     granted = 0
+    touched: list[Enrollment] = []
     for user_id in set(body.user_ids):
         if body.module_id is None:
             enrollment = (
@@ -547,22 +552,23 @@ async def admin_grant_access(
                 .first()
             )
             if enrollment is None:
-                db.add(
-                    Enrollment(
-                        student_id=user_id,
-                        course_id=body.course_id,
-                        status=EnrollmentStatus.ACTIVE,
-                        enrolled_at=now,
-                        expires_at=None,
-                        is_manual=True,
-                    )
+                enrollment = Enrollment(
+                    student_id=user_id,
+                    course_id=body.course_id,
+                    status=EnrollmentStatus.ACTIVE,
+                    enrolled_at=now,
+                    expires_at=None,
+                    is_manual=True,
                 )
+                db.add(enrollment)
+                touched.append(enrollment)
                 granted += 1
             elif enrollment.status != EnrollmentStatus.ACTIVE:
                 enrollment.status = EnrollmentStatus.ACTIVE
                 enrollment.enrolled_at = now
                 enrollment.expires_at = None
                 enrollment.is_manual = True
+                touched.append(enrollment)
                 granted += 1
         elif (
             not db.query(LessonAccess.id)
@@ -582,6 +588,9 @@ async def admin_grant_access(
             )
             granted += 1
     db.commit()
+    for enrollment in touched:
+        announce_enrollment(enrollment, "manual")
+    announce_access_many(db, set(body.user_ids))
     return {"message": f"Access granted to {granted} student(s)", "granted": granted}
 
 
@@ -605,6 +614,8 @@ def admin_revoke_access(
             )
         # Kept as a record (payments may reference it), just no longer active.
         enrollment.status = EnrollmentStatus.CANCELLED
+        db.commit()
+        announce_enrollment(enrollment, "manual")
     else:
         removed = (
             db.query(LessonAccess)
@@ -616,6 +627,7 @@ def admin_revoke_access(
         if not removed:
             raise HTTPException(status_code=404, detail={"error": "ACCESS_NOT_FOUND"})
     db.commit()
+    announce_access(db, user_id)
     return {"message": "Access revoked"}
 
 
@@ -624,21 +636,18 @@ def admin_revoke_access(
     response_model=EnrollmentResponse,
     status_code=status.HTTP_200_OK,
 )
-@router.get(
-    "/enrollments",
-    response_model=EnrollmentResponse,
-    status_code=status.HTTP_200_OK,
-    include_in_schema=False,
-)
 def get_enrollment(
     student_id: int = Query(..., description="ID of the student"),
     course_id: int = Query(..., description="ID of the course"),
+    payload: dict = Depends(require_role(["student", "teacher", "admin"])),
     db: Session = Depends(get_db),
 ):
-    """
-    Query enrollment status by student_id and course_id.
-    Exposed so other services (e.g., content_service) can verify student access.
-    """
+    """Enrollment status for a student and course: the student themselves, or an admin."""
+    if payload.get("role", "").lower() != "admin" and int(payload["sub"]) != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "INSUFFICIENT_PERMISSIONS"},
+        )
     enrollment = (
         db.query(Enrollment)
         .filter(

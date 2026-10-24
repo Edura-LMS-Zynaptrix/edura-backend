@@ -1,13 +1,12 @@
 import magic
+from access import is_enrolled
 from cloudinary_utils import (
     AVATAR_FOLDER,
     FOLDER,
-    RECEIPT_FOLDER,
     delete_asset,
     get_signed_url,
     upload_asset,
 )
-from enrollment_client import is_enrolled
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from schemas import (
     SignedUrlRequest,
@@ -316,88 +315,4 @@ async def upload_avatar(
         public_id=public_id,
         secure_url=secure_url,
         message="Avatar uploaded successfully",
-    )
-
-
-# ---------------------------------------------------------------------------
-# POST /internal/receipt-upload — service-to-service only (payment_service)
-# ---------------------------------------------------------------------------
-
-
-_INTERNAL_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-_MAX_INTERNAL_IMAGE = 10 * 1024 * 1024  # 10 MB
-
-
-@router.post("/internal/image-upload", response_model=UploadValidationResponse)
-async def upload_image_internal(file: UploadFile = File(...)):
-    """
-    Service-to-service only (blocked at the gateway): assessment_service stores
-    question/option images and exam thumbnails from bulk ZIP uploads. The file
-    signature decides the type, never the name or the declared MIME.
-    """
-    content = await file.read()
-    if not content:
-        raise HTTPException(
-            status_code=422, detail={"error": "EMPTY_FILE", "message": "Image is empty"}
-        )
-    if len(content) > _MAX_INTERNAL_IMAGE:
-        raise HTTPException(
-            status_code=413,
-            detail={"error": "FILE_TOO_LARGE", "message": "Image exceeds 10 MB"},
-        )
-    detected_mime = magic.from_buffer(content, mime=True)
-    if detected_mime not in _INTERNAL_IMAGE_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail={
-                "error": "NOT_AN_IMAGE",
-                "message": f"File content is '{detected_mime}', not an image",
-            },
-        )
-    public_id, secure_url = upload_asset(
-        content, file.filename or "image", resource_type="image"
-    )
-    return UploadValidationResponse(
-        valid=True,
-        filename=file.filename or "",
-        size_bytes=len(content),
-        mime_type=detected_mime,
-        public_id=public_id,
-        secure_url=secure_url,
-        message="Image uploaded successfully",
-    )
-
-
-@router.post("/internal/receipt-upload", response_model=UploadValidationResponse)
-async def upload_receipt_internal(file: UploadFile = File(...)):
-    """
-    No auth dependency: called server-to-server by payment_service, which has
-    already authenticated and size/MIME-validated the request itself — mirrors
-    the same unauthenticated internal-call pattern as enrollment_service's
-    /enrollments lookup and course_service's /{course_id}/owner.
-    """
-    content = await file.read()
-
-    detected_mime = magic.from_buffer(content, mime=True)
-    if detected_mime not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail={
-                "error": "MIME_MISMATCH",
-                "message": f"File signature indicates '{detected_mime}', which does not match declared type",
-            },
-        )
-
-    public_id, secure_url = upload_asset(
-        content, file.filename or "receipt", folder=RECEIPT_FOLDER
-    )
-
-    return UploadValidationResponse(
-        valid=True,
-        filename=file.filename or "",
-        size_bytes=len(content),
-        mime_type=detected_mime,
-        public_id=public_id,
-        secure_url=secure_url,
-        message="Receipt uploaded successfully",
     )

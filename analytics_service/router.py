@@ -10,8 +10,8 @@ import redis
 from events import publish_event
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from readmodel import SourceUnavailable, account, fetch_platform_sources
 from report import generate_report_pdf, now_local
-from service_clients import SourceUnavailable, account, fetch_platform_sources
 
 from shared.auth import require_role
 

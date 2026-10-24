@@ -1,5 +1,6 @@
 import logging
 
+import event_consumer
 from chat_router import router as chat_router
 from database import Base, engine
 from fastapi import FastAPI
@@ -20,6 +21,8 @@ def on_startup():
         logger.info("Admin service database tables verified.")
     except Exception as e:
         logger.error(f"Error initializing DB tables on startup: {e}")
+
+    event_consumer.start()
 
 
 @app.get("/health")

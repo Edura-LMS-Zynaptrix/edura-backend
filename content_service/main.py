@@ -1,5 +1,6 @@
 import logging
 
+import event_consumer
 from database import Base, engine
 from fastapi import FastAPI
 from router import router
@@ -16,6 +17,8 @@ def on_startup():
         logger.info("Content service database tables verified.")
     except Exception as e:
         logger.error(f"Error initializing DB tables on startup: {e}")
+
+    event_consumer.start()
 
 
 @app.get("/health")

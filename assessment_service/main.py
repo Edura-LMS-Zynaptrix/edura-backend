@@ -1,10 +1,14 @@
 import logging
 
+import event_consumer
+import resync
 from badges import seed_badges
 from database import Base, SessionLocal, engine
 from fastapi import FastAPI
 from router import router
 from sqlalchemy import text
+
+from shared import messaging
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,9 @@ def on_startup():
         logger.info("Badges seeded.")
     except Exception as e:
         logger.error(f"Error seeding badges on startup: {e}")
+
+    event_consumer.start()
+    messaging.resync_later(resync.announce_everything)
 
 
 # Registered before the router: /{assessment_id} is a plain wildcard path

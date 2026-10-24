@@ -1,9 +1,13 @@
 import logging
 
-from database import Base, engine
+import event_consumer
+from database import Base, SessionLocal, engine
+from events import announce_everything
 from fastapi import FastAPI
 from router import router
 from sqlalchemy import text
+
+from shared import messaging
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,17 @@ def on_startup():
         logger.info("Course service column migrations applied.")
     except Exception as e:
         logger.error(f"Error applying column migrations on startup: {e}")
+
+    event_consumer.start()
+    messaging.resync_later(_resync)
+
+
+def _resync() -> None:
+    db = SessionLocal()
+    try:
+        announce_everything(db)
+    finally:
+        db.close()
 
 
 @app.get("/health")

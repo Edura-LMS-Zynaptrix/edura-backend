@@ -1,9 +1,10 @@
 import re
-from datetime import datetime
 from typing import Optional
 
 from models import OtpPurpose, UserRole
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+
+from shared.profile_schema import UserProfileCreate
 
 
 def check_password_strength(password: str) -> str:
@@ -49,26 +50,12 @@ class OtpVerifyRequest(BaseModel):
     purpose: OtpPurpose = OtpPurpose.email_verify
 
 
-class RegistrationProfile(BaseModel):
-    """Profile details collected on the sign-up form; stored by user_service."""
-
-    first_name: str = Field(..., min_length=1, max_length=100)
-    last_name: str = Field(default="", max_length=100)
-    mobile_no: Optional[str] = None
-    school: Optional[str] = Field(default=None, max_length=200)
-    district: Optional[str] = None
-    grade: Optional[int] = Field(default=None, ge=5, le=13)
-    stream_id: Optional[int] = None
-    nic_number: Optional[str] = None
-    selected_subjects: Optional[list[str]] = None
-    referral_code: Optional[str] = Field(default=None, max_length=32)
-
-
 class UserRegisterRequest(BaseModel):
     email: EmailStr
     password: str
     role: UserRole = UserRole.student
-    profile: Optional[RegistrationProfile] = None
+    # The sign-up form's details; announced with the registration and stored by user_service.
+    profile: Optional[UserProfileCreate] = None
 
     @field_validator("password")
     @classmethod
@@ -175,20 +162,3 @@ class CreateAdminRequest(BaseModel):
 
 class UserStatusUpdateRequest(BaseModel):
     is_active: bool
-
-
-class InternalUserResponse(BaseModel):
-    """Bulk-listing shape for other services (e.g. user_service enriching an
-    admin-facing profile list with the is_active/email fields that only
-    auth_service owns) — served from an unauthenticated /internal/ route,
-    matching the pattern already used for cross-service reads elsewhere
-    (course_service's /owner, content_service's /internal/receipt-upload)."""
-
-    id: int
-    email: str
-    role: UserRole
-    is_active: bool
-    is_email_verified: bool
-    created_at: datetime
-
-    model_config = {"from_attributes": True}

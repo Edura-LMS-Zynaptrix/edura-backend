@@ -16,6 +16,12 @@ from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, Numeric, String,
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
+from shared.replicas import (
+    define_replica_access,
+    define_replica_course,
+    define_replica_user,
+)
+
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
@@ -252,3 +258,10 @@ class UserBadge(Base):
         Index("ix_user_badges_student_id", "student_id"),
         Index("uq_user_badges_student_badge", "student_id", "badge_id", unique=True),
     )
+
+
+# Copies of what other services announced: who can open what, the catalogue (owner
+# and titles) and people (names for leaderboards). Written only by the event consumer.
+ReplicaAccess = define_replica_access(Base)
+ReplicaCourse = define_replica_course(Base)
+ReplicaUser = define_replica_user(Base)

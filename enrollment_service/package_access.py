@@ -1,6 +1,9 @@
 """
 Who may open what: a course enrollment, a single-lesson grant, or an active
-class package that covers the course (the reference platform's rules).
+class package that covers the course.
+
+Course facts (grade, streams) come from this service's own copy of the catalogue,
+kept current by course events, so nothing here calls another service.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -11,11 +14,22 @@ from models import (
     Enrollment,
     EnrollmentStatus,
     LessonAccess,
+    ReplicaCourse,
 )
-from service_clients import course_info
 from sqlalchemy.orm import Session
 
 PACKAGE_DURATION = timedelta(days=365)
+
+
+def allowed_student_grades(course_grade: int | None) -> list[int] | None:
+    """Which students may see a course: the reverse of the O/L (10<->11) and A/L (12<->13) bands."""
+    if course_grade is None:
+        return None
+    if course_grade == 10:
+        return [10, 11]
+    if course_grade == 12:
+        return [12, 13]
+    return [course_grade]
 
 
 def package_covers(
@@ -39,13 +53,37 @@ def package_covers(
     return False
 
 
+def course_facts(course: ReplicaCourse) -> dict:
+    return {
+        "id": course.id,
+        "title": course.title,
+        "grade": course.grade,
+        "stream_ids": course.stream_ids or [],
+        "course_type": course.course_type,
+        "status": course.status,
+    }
+
+
+def get_course(db: Session, course_id: int) -> dict | None:
+    row = db.get(ReplicaCourse, course_id)
+    return course_facts(row) if row else None
+
+
+def published_courses(db: Session) -> list[dict]:
+    rows = db.query(ReplicaCourse).order_by(ReplicaCourse.id).all()
+    return [course_facts(r) for r in rows if r.is_published]
+
+
 def _aware(dt: datetime | None) -> datetime | None:
     if dt is not None and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
 
-def active_packages(db: Session, user_id: int) -> list[ClassPackage]:
+def active_package_grants(
+    db: Session, user_id: int
+) -> list[tuple[ClassPackage, datetime | None]]:
+    """The student's class packages that are active and not past their end date."""
     now = datetime.now(timezone.utc)
     rows = (
         db.query(ClassEnrollment, ClassPackage)
@@ -58,10 +96,14 @@ def active_packages(db: Session, user_id: int) -> list[ClassPackage]:
         .all()
     )
     return [
-        pkg
+        (pkg, _aware(enr.expires_at))
         for enr, pkg in rows
         if enr.expires_at is None or _aware(enr.expires_at) > now
     ]
+
+
+def active_packages(db: Session, user_id: int) -> list[ClassPackage]:
+    return [pkg for pkg, _ in active_package_grants(db, user_id)]
 
 
 def direct_course_access(db: Session, student_id: int, course_id: int) -> bool:
@@ -86,7 +128,7 @@ def lesson_grants(db: Session, student_id: int, course_id: int) -> list[int]:
     ]
 
 
-async def course_access(
+def course_access(
     db: Session, student_id: int, course_id: int
 ) -> tuple[bool, str | None]:
     """(whole course unlocked?, how) — how is 'course' or 'class'."""
@@ -94,23 +136,12 @@ async def course_access(
         return True, "course"
     packages = active_packages(db, student_id)
     if packages:
-        course = await course_info(course_id)
+        course = get_course(db, course_id)
         if course and any(
             package_covers(p.grade, p.stream_id, course) for p in packages
         ):
             return True, "class"
     return False, None
-
-
-async def has_access(
-    db: Session, student_id: int, course_id: int, module_id: int | None
-) -> bool:
-    whole_course, _ = await course_access(db, student_id, course_id)
-    if whole_course:
-        return True
-    return module_id is not None and module_id in lesson_grants(
-        db, student_id, course_id
-    )
 
 
 def grant_package(

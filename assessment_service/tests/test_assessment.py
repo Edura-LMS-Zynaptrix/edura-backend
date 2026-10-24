@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -18,6 +19,9 @@ from models import (
     AssessmentType,
     Question,
     QuestionType,
+    ReplicaAccess,
+    ReplicaCourse,
+    ReplicaUser,
     Submission,
     ViolationLog,
     ViolationType,
@@ -238,9 +242,18 @@ def test_submit_assessment_ac2(mock_publish):
     assert res_data["total_questions"] == 2
     assert res_data["auto_submitted"] is False
 
-    mock_publish.assert_called_once_with(
-        student_id=103, assessment_id=1, score=100.0, passed=True
-    )
+    mock_publish.assert_called_once()
+    sent = mock_publish.call_args.kwargs
+    assert (
+        sent["student_id"],
+        sent["assessment_id"],
+        sent["score"],
+        sent["passed"],
+    ) == (103, 1, 100.0, True)
+    # the event carries the whole result, so listeners (progress, analytics) need nothing else
+    assert sent["course_id"] == 10 and sent["submission_id"] is not None
+    assert sent["total_questions"] == 2 and sent["marks_obtained"] is not None
+    assert sent["submitted_at"] is not None
 
 
 @patch("router.publish_assessment_graded")
@@ -268,9 +281,18 @@ def test_auto_submit_on_expiry_ac3(mock_publish):
     assert res_data["correct_count"] == 1
     assert res_data["auto_submitted"] is True
 
-    mock_publish.assert_called_once_with(
-        student_id=104, assessment_id=1, score=50.0, passed=True
-    )
+    mock_publish.assert_called_once()
+    sent = mock_publish.call_args.kwargs
+    assert (
+        sent["student_id"],
+        sent["assessment_id"],
+        sent["score"],
+        sent["passed"],
+    ) == (104, 1, 50.0, True)
+    # the event carries the whole result, so listeners (progress, analytics) need nothing else
+    assert sent["course_id"] == 10 and sent["submission_id"] is not None
+    assert sent["total_questions"] == 2 and sent["marks_obtained"] is not None
+    assert sent["submitted_at"] is not None
 
 
 def test_tab_switch_violation_ac4():
@@ -681,3 +703,159 @@ def test_result_rank_matches_leaderboard_and_ignores_retakes(ranked_attempts):
         3,
         2,
     )
+
+
+# ---------------------------------------------------------------------------
+# No direct calls: access, owners, titles and names come from this service's copies
+# ---------------------------------------------------------------------------
+
+import access as access_module  # noqa: E402
+import catalog  # noqa: E402
+import event_consumer  # noqa: E402
+import events as events_module  # noqa: E402
+import people  # noqa: E402
+
+
+@pytest.fixture()
+def local_copies(monkeypatch):
+    """Use the real local lookups (the default fixtures replace them with stubs)."""
+    for module in (access_module, catalog, people, event_consumer):
+        monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr("router.is_enrolled", access_module.is_enrolled)
+    monkeypatch.setattr(
+        "router.get_course_instructor_id", catalog.get_course_instructor_id
+    )
+    monkeypatch.setattr("router.get_course_titles", catalog.get_course_titles)
+    monkeypatch.setattr("router.get_profiles", people.get_profiles)
+    sent = []
+    monkeypatch.setattr(
+        events_module,
+        "publish",
+        lambda key, payload: sent.append((key, payload)) or True,
+    )
+    yield event_consumer.handle, sent
+    db = TestingSessionLocal()
+    for model in (ReplicaAccess, ReplicaCourse, ReplicaUser):
+        db.query(model).delete()
+    db.commit()
+    db.close()
+
+
+def _course_event(instructor_id=5, title="Python"):
+    return {
+        "id": 10,
+        "title": title,
+        "instructor_id": instructor_id,
+        "status": "PUBLISHED",
+    }
+
+
+def test_sitting_an_exam_needs_the_access_list_to_say_so(local_copies):
+    deliver, _ = local_copies
+    headers = {"Authorization": f"Bearer {create_token(user_id=300, role='student')}"}
+
+    denied = client.post("/api/assessments/1/start", headers=headers)
+    assert (
+        denied.status_code == 403 and denied.json()["detail"]["error"] == "NOT_ENROLLED"
+    )
+
+    deliver(
+        "access.changed",
+        {"student_id": 300, "courses": [{"id": 10, "until": None}], "lessons": []},
+    )
+    assert client.post("/api/assessments/1/start", headers=headers).status_code == 200
+
+
+def test_a_lesson_grant_or_an_expired_grant_is_honoured(local_copies):
+    deliver, _ = local_copies
+    deliver("access.changed", {"student_id": 301, "courses": [], "lessons": [55]})
+    deliver(
+        "access.changed",
+        {
+            "student_id": 302,
+            "courses": [{"id": 10, "until": "2020-01-01T00:00:00+00:00"}],
+            "lessons": [],
+        },
+    )
+    assert asyncio.run(access_module.is_enrolled(301, 10, 55)) is True
+    assert asyncio.run(access_module.is_enrolled(301, 10, 56)) is False
+    assert asyncio.run(access_module.is_enrolled(302, 10)) is False
+
+
+def test_a_teacher_can_only_manage_exams_of_courses_they_own(local_copies):
+    deliver, sent = local_copies
+    deliver("course.upserted", _course_event(instructor_id=5))
+    body = {"course_id": 10, "title": "Unit test", "is_published": True}
+
+    owner = {"Authorization": f"Bearer {create_token(user_id=5, role='teacher')}"}
+    other = {"Authorization": f"Bearer {create_token(user_id=6, role='teacher')}"}
+    admin = {"Authorization": f"Bearer {create_token(user_id=1, role='admin')}"}
+    assert client.post("/", json=body, headers=other).status_code == 403
+    assert (
+        client.post("/", json={**body, "course_id": 999}, headers=other).status_code
+        == 404
+    )
+
+    created = client.post("/", json=body, headers=owner)
+    assert created.status_code == 201
+    assert client.post("/", json=body, headers=admin).status_code == 201
+
+    # every change to an exam is announced for the services that keep a copy
+    key, payload = sent[0]
+    assert (
+        key == "assessment.upserted"
+        and payload["course_id"] == 10
+        and payload["is_published"] is True
+    )
+
+    exam_id = created.json()["id"]
+    assert (
+        client.put(
+            f"/{exam_id}", json={"is_published": False}, headers=owner
+        ).status_code
+        == 200
+    )
+    assert sent[-1][1]["is_published"] is False
+    assert client.delete(f"/{exam_id}", headers=owner).status_code == 204
+    assert sent[-1] == ("assessment.deleted", {"id": exam_id})
+
+
+def test_titles_and_leaderboard_names_come_from_the_local_copies(local_copies):
+    deliver, _ = local_copies
+    deliver("course.upserted", _course_event(title="Python Basics"))
+    deliver(
+        "user.profile-upserted",
+        {
+            "user_id": 400,
+            "role": "student",
+            "full_name": "Ama Perera",
+            "district": "Colombo",
+            "grade": 11,
+        },
+    )
+    assert asyncio.run(catalog.get_course_titles([10, 11])) == {10: "Python Basics"}
+    assert asyncio.run(catalog.get_course_instructor_id(10)) == 5
+    profiles = asyncio.run(people.get_profiles([400, 401]))
+    assert profiles[400]["full_name"] == "Ama Perera" and 401 not in profiles
+
+
+def test_the_graded_event_is_published_with_the_full_result(local_copies):
+    deliver, sent = local_copies
+    deliver(
+        "access.changed",
+        {"student_id": 310, "courses": [{"id": 10, "until": None}], "lessons": []},
+    )
+    headers = {"Authorization": f"Bearer {create_token(user_id=310, role='student')}"}
+    start = client.post("/api/assessments/1/start", headers=headers).json()
+    client.post(
+        "/api/assessments/1/submit",
+        json={
+            "session_id": start["session_id"],
+            "answers": [{"question_id": 1, "selected_option": "def"}],
+        },
+        headers=headers,
+    )
+    graded = [p for k, p in sent if k == "assessment.graded"]
+    assert len(graded) == 1
+    assert graded[0]["student_id"] == 310 and graded[0]["course_id"] == 10
+    assert graded[0]["total_questions"] == 2 and graded[0]["submission_id"]

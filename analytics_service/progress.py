@@ -7,7 +7,7 @@ profile. Nothing here is stored; every view is rebuilt from those sources.
 
 import asyncio
 
-import service_clients as clients
+import readmodel as clients
 
 PASS_MARK_PCT = 85  # an attempt counts as passed at or above this score
 FAIL_MARK_PCT = 40  # a first attempt below this score counts as a failure
