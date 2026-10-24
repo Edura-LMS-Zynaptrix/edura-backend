@@ -1,0 +1,11 @@
+# Secrets are injected at runtime (docker compose env_file / Kubernetes secrets),
+# never baked into images.
+**/.env
+**/.env.*
+!**/.env.example
+
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.venv
+.git
