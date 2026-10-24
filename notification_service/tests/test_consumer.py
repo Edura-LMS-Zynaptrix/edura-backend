@@ -339,3 +339,20 @@ def test_process_email_verification_sends_the_link():
         assert log.status == NotificationStatus.sent
     finally:
         db.close()
+
+def test_process_password_reset_sends_the_link():
+    mock_ch = MagicMock()
+    mock_method = MagicMock()
+    mock_method.delivery_tag = 12
+    mock_method.routing_key = "auth.password-reset-requested"
+
+    body = json.dumps(
+        {
+            "user_id": 77,
+            "email": "forgetful@example.com",
+            "reset_url": "http://localhost:3000/reset-password?token=xyz.123",
+            "expires_in_minutes": 60,
+        }
+    )
+
+    
