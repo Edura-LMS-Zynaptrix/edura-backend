@@ -340,6 +340,7 @@ def test_process_email_verification_sends_the_link():
     finally:
         db.close()
 
+
 def test_process_password_reset_sends_the_link():
     mock_ch = MagicMock()
     mock_method = MagicMock()
