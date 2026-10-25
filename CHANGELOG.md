@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- CI: workflow now also runs on pushes to `develop`, `main`, `feature/**`, `fix/**`, `hotfix/**` and `release/**`; adds a build check, a missing-tests failure, a changed-lines coverage gate (>= 80% on PRs), per-service `coverage-<service>` artifacts and a separate `Security Scan` job
 - `notification_service`: email is now sent through the Resend API (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`) instead of SMTP; the `SMTP_*` settings are removed
 
 ### Added
