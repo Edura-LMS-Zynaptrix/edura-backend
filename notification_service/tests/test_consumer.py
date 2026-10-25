@@ -378,3 +378,7 @@ def test_process_password_reset_sends_the_link():
         assert log.recipient_id == 77
     finally:
         db.close()
+        
+        
+        
+        
