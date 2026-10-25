@@ -11,6 +11,7 @@ app = FastAPI(title="Notification Service")
 app.include_router(router)
 
 
+
 @app.on_event("startup")
 def on_startup():
     try:
