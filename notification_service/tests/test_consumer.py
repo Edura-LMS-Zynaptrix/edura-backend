@@ -339,3 +339,62 @@ def test_process_email_verification_sends_the_link():
         assert log.status == NotificationStatus.sent
     finally:
         db.close()
+
+
+def test_password_reset_email_includes_reset_link():
+    mock_ch = MagicMock()
+    mock_method = MagicMock()
+    mock_method.delivery_tag = 12
+    mock_method.routing_key = "auth.password-reset-requested"
+
+    body = json.dumps(
+        {
+            "user_id": 77,
+            "email": "forgetful@example.com",
+            "reset_url": "http://localhost:3000/reset-password?token=xyz.123",
+            "expires_in_minutes": 60,
+        }
+    )
+
+    with patch("consumer.send_email") as mock_send:
+        process_message(mock_ch, mock_method, None, body)
+
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs["to_email"] == "forgetful@example.com"
+        assert kwargs["subject"] == "Reset your Edura password"
+        assert "reset-password?token=xyz.123" in kwargs["html_body"]
+        assert "copy this link into your browser" in kwargs["html_body"]
+        assert "60 minutes" in kwargs["html_body"]
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=12)
+
+
+def test_password_reset_email_uses_default_values():
+    mock_ch = MagicMock()
+    mock_method = MagicMock()
+    mock_method.delivery_tag = 13
+    mock_method.routing_key = "auth.password-reset-requested"
+
+    body = json.dumps({"user_id": 78, "email": "defaults@example.com"})
+
+    with patch("consumer.send_email") as mock_send:
+        process_message(mock_ch, mock_method, None, body)
+
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs["to_email"] == "defaults@example.com"
+        assert 'href="#"' in kwargs["html_body"]
+        assert "60 minutes" in kwargs["html_body"]
+        mock_ch.basic_ack.assert_called_once_with(delivery_tag=13)
+
+    db = TestingSessionLocal()
+    try:
+        log = (
+            db.query(NotificationLog)
+            .filter_by(recipient_email="defaults@example.com")
+            .first()
+        )
+        assert log is not None
+        assert log.event_type == NotificationEvent.password_reset_requested
+        assert log.status == NotificationStatus.sent
+        assert log.recipient_id == 78
+    finally:
+        db.close()
