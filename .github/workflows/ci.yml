@@ -1,6 +1,8 @@
 name: Backend CI — Microservices Matrix
 
 on:
+  push:
+    branches: [ develop, main, 'feature/**', 'fix/**', 'hotfix/**', 'release/**' ]
   pull_request:
     branches: [ develop, main ]
 
@@ -8,13 +10,12 @@ jobs:
   verify-service:
     name: Verify ${{ matrix.service }}
     runs-on: ubuntu-latest
-    
+
     # This prevents GitHub from cancelling the other 10 services if 1 fails
     strategy:
-      fail-fast: false 
+      fail-fast: false
       matrix:
-        # The 11 services defined in your project architecture[cite: 1]
-        service: 
+        service:
           - auth_service
           - user_service
           - course_service
@@ -27,7 +28,7 @@ jobs:
           - analytics_service
           - admin_service
 
-    # Spin up isolated test databases for the specific runner[cite: 2]
+    # Isolated test databases for the migration (integration) tests
     services:
       postgres:
         image: postgres:16
@@ -53,58 +54,103 @@ jobs:
           --health-retries 5
 
     steps:
-      # Checkout the edura-backend code (No PAT required here anymore!)
       - name: Checkout Backend Repo
         uses: actions/checkout@v4
+        with:
+          # diff-cover needs the base branch to find the lines a PR changed
+          fetch-depth: 0
 
-      # Setup Python environment[cite: 2]
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip' # Speeds up installation
+          cache: 'pip'
 
-      # Install global linting and testing tools[cite: 2]
       - name: Install Base Tools
         run: |
           python -m pip install --upgrade pip
-          pip install ruff black pytest pytest-cov httpx pip-audit
+          pip install ruff black pytest pytest-cov httpx diff-cover
 
-      # Install the specific dependencies for the current matrix service
       - name: Install ${{ matrix.service }} Dependencies
         run: |
           if [ -f "${{ matrix.service }}/requirements.txt" ]; then
             pip install -r ${{ matrix.service }}/requirements.txt
           fi
 
-      # Run Linters[cite: 2]
+      # --- Lint & Format ---
       - name: Run Ruff
         run: ruff check ${{ matrix.service }}/
 
       - name: Run Black
         run: black --check ${{ matrix.service }}/
 
-      # Setup specific database for this service[cite: 2]
+      # --- Build ---
+      - name: Build check (byte-compile)
+        run: python -m compileall -q ${{ matrix.service }}
+
+      - name: Build check (Docker image)
+        run: |
+          if [ -f "${{ matrix.service }}/Dockerfile" ]; then
+            docker build -f ${{ matrix.service }}/Dockerfile -t edura-${{ matrix.service }}:ci .
+          fi
+
+      # --- Tests (unit + integration; Postgres/Redis service containers above) ---
       - name: Create Test Database
         run: |
           PGPASSWORD=test_password psql -h localhost -U test_user -d test_db -c "CREATE DATABASE test_db_${{ matrix.service }};" || true
 
-      # Run Pytest for this specific service[cite: 2]
-      - name: Run Unit Tests
+      - name: Run Tests
         env:
           REDIS_HOST: localhost
           DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db_${{ matrix.service }}
           PYTHONPATH: .:${{ matrix.service }}
         run: |
-          if [ -d "${{ matrix.service }}/tests" ]; then
-            pytest ${{ matrix.service }} --cov=${{ matrix.service }} --cov-report=xml
-          else
-            echo "No tests folder found for ${{ matrix.service }}, skipping pytest."
+          if [ ! -d "${{ matrix.service }}/tests" ]; then
+            echo "::error::No tests folder found for ${{ matrix.service }}"
+            exit 1
           fi
+          pytest ${{ matrix.service }} \
+            --cov=${{ matrix.service }} --cov-report=xml:coverage.xml --cov-report=term
 
-      # Run Security Audit on the service's dependencies[cite: 2]
-      - name: Security Scan
+      # Guideline 6.4 / 8.2: coverage on NEW code must be >= 80%
+      - name: Coverage gate (changed lines >= 80%)
+        if: github.event_name == 'pull_request' && hashFiles('coverage.xml') != ''
         run: |
-          if [ -f "${{ matrix.service }}/requirements.txt" ]; then
-            pip-audit -r ${{ matrix.service }}/requirements.txt
-          fi
+          diff-cover coverage.xml \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=80 \
+            --markdown-report=diff-coverage.md
+          cat diff-coverage.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service }}
+          path: coverage.xml
+
+  # Guideline 7.2: dependency vulnerability scan
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Backend Repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit dependencies of every service
+        run: |
+          status=0
+          for req in */requirements.txt; do
+            echo "::group::pip-audit $req"
+            pip-audit -r "$req" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
