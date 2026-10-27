@@ -96,6 +96,29 @@ Windows PowerShell: `$env:PYTHONPATH = ".;auth_service"; python -m pytest auth_s
 
 Each service's `tests/test_migrations.py` needs a real PostgreSQL database in `DATABASE_URL`; it is skipped when none is available. CI runs it against a PostgreSQL container. Coverage on new code must be at least 80% (enforced on pull requests by CI).
 
+### Test coverage
+
+Line coverage of every service, taken from the CI run on `develop` at commit `69d6975` (27 October 2026; Linux, Python 3.12, real PostgreSQL and Redis containers, migration tests included):
+
+| Service | Lines covered / total | Coverage |
+|---|---:|---:|
+| `admin_service` | 910 / 925 | 98.38% |
+| `analytics_service` | 1,610 / 1,631 | 98.71% |
+| `assessment_service` | 2,892 / 2,914 | 99.25% |
+| `auth_service` | 1,486 / 1,505 | 98.74% |
+| `content_service` | 626 / 639 | 97.97% |
+| `course_service` | 1,800 / 1,822 | 98.79% |
+| `enrollment_service` | 1,221 / 1,269 | 96.22% |
+| `notification_service` | 807 / 827 | 97.58% |
+| `payment_service` | 1,017 / 1,028 | 98.93% |
+| `progress_service` | 960 / 977 | 98.26% |
+| `user_service` | 1,445 / 1,463 | 98.77% |
+| **Total (11 services)** | **14,774 / 15,000** | **98.49%** |
+
+The figures include the test files themselves, because each service is measured with `--cov=<service>`.
+
+The coverage badge at the top shows the live combined figure from CI. Each CI run also uploads a `coverage-<service>` report artifact per service.
+
 ### Formatting & Linting
 We use **Ruff** for linting and **Black** for code formatting.
 To run Ruff:
