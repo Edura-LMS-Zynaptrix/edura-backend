@@ -1,7 +1,7 @@
 # EDURA Backend — Microservices monorepo
 
 [![Backend CI](https://github.com/Edura-LMS-Zynaptrix/edura-backend/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Edura-LMS-Zynaptrix/edura-backend/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/Edura-LMS-Zynaptrix/edura-backend/branch/develop/graph/badge.svg)](https://codecov.io/gh/Edura-LMS-Zynaptrix/edura-backend)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Edura-LMS-Zynaptrix/edura-backend/badges/coverage.json)](https://github.com/Edura-LMS-Zynaptrix/edura-backend/actions/workflows/ci.yml)
 
 This repository contains the 11 Python (FastAPI) microservices that power the EDURA Learning Management System (LMS). It is one part of the EDURA project:
 
@@ -111,6 +111,8 @@ black --check .
 ## Continuous integration
 
 Every pull request and every push to `develop`, `main`, `feature/**` and `fix/**` runs the **Backend CI** workflow: one job per service (lint, format check, build check, tests with coverage) and a `Security Scan` job (`pip-audit`). Coverage reports are uploaded as artifacts and the changed-lines coverage gate applies to pull requests.
+
+The coverage badge at the top is updated by the `Coverage Badge` job on every push to `develop`: it adds up the line coverage of all services and writes the result to `coverage.json` on the `badges` branch, which the badge reads.
 
 ## Branching and releases
 
