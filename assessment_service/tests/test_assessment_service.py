@@ -1205,6 +1205,41 @@ def test_my_last_attempt_404_without_one(db):
     assert resp.json()["detail"]["error"] == "NO_ATTEMPT_FOUND"
 
 
+def test_my_last_attempt_is_served_on_the_api_prefixed_path(db):
+    # The same handler is registered a second time under /api/assessments/...
+    exam = _exam(db, pass_score=50)
+    q = _question(db, exam.id, answer="A")
+    _graded(
+        db,
+        exam.id,
+        score=100,
+        seconds=90,
+        answers_json=json.dumps([{"question_id": q.id, "selected_option": "A"}]),
+    )
+
+    prefixed = client.get(
+        f"/api/assessments/{exam.id}/my-last-attempt", headers=STUDENT
+    )
+    plain = client.get(f"/{exam.id}/my-last-attempt", headers=STUDENT)
+
+    assert prefixed.status_code == 200
+    assert prefixed.json() == plain.json()
+    assert prefixed.json()["score"] == 100.0
+
+
+def test_my_last_attempt_api_prefixed_path_404_without_one(db):
+    exam = _exam(db)
+    resp = client.get(f"/api/assessments/{exam.id}/my-last-attempt", headers=STUDENT)
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "NO_ATTEMPT_FOUND"
+
+
+def test_my_last_attempt_api_prefixed_path_requires_a_token(db):
+    exam = _exam(db)
+    resp = client.get(f"/api/assessments/{exam.id}/my-last-attempt")
+    assert resp.status_code in (401, 403)
+
+
 # ---------------------------------------------------------------------------
 # My attempts, my submissions, attempt review
 # ---------------------------------------------------------------------------
