@@ -62,13 +62,24 @@ def _logs():
 # ---------------------------------------------------------------------------
 
 
-def test_password_changed_email(mailed):
+def test_given_password_changed_event_when_delivered_then_message_is_acknowledged_and_email_sent(
+    mailed,
+):
+    # Act
     ch = _deliver("auth.password-changed", {"user_id": 7, "email": "ama@example.com"})
+
+    # Assert
     ch.basic_ack.assert_called_once_with(delivery_tag=11)
     (mail,) = mailed
+
+    # Act and assert
     assert mail["subject"] == "Your Edura password was changed"
     assert mail["attachments"] == []
+
+    # Act
     (log,) = _logs()
+
+    # Assert
     assert (log.event_type, log.status, log.recipient_id) == (
         NotificationEvent.password_changed,
         NotificationStatus.sent,
@@ -76,16 +87,24 @@ def test_password_changed_email(mailed):
     )
 
 
-def test_student_email_and_id_fields_are_accepted(mailed):
+def test_given_event_with_student_email_and_id_fields_when_consumed_then_they_are_accepted(
+    mailed,
+):
+    # Arrange
     _deliver(
         "payment.success",
         {"student_email": "kid@example.com", "student_id": 9, "order_id": "ORD-1"},
     )
+
+    # Act and assert
     assert mailed[0]["to_email"] == "kid@example.com"
     assert _logs()[0].recipient_id == 9
 
 
-def test_verification_link_lifetime_is_shown_in_hours(mailed):
+def test_given_link_valid_for_twenty_minutes_when_email_rendered_then_lifetime_reads_as_one_hour(
+    mailed,
+):
+    # Act
     _deliver(
         "auth.email-verification-requested",
         {
@@ -95,11 +114,17 @@ def test_verification_link_lifetime_is_shown_in_hours(mailed):
         },
     )
     # Under an hour still reads as "1 hour", never "0 hours".
+    # Assert
     assert "1" in mailed[0]["html_body"]
 
 
-def test_progress_report_subject_without_a_month(mailed):
+def test_given_progress_report_without_month_when_subject_built_then_subject_has_no_month(
+    mailed,
+):
+    # Act
     _deliver("report.progress", {"email": "a@example.com", "pdf_base64": ""})
+
+    # Assert
     assert mailed[0]["subject"] == "Your Edura Progress Report"
     assert mailed[0]["attachments"][0]["filename"] == "Progress_Report.pdf"
 
@@ -111,15 +136,25 @@ def test_progress_report_subject_without_a_month(mailed):
         ("report.progress", {"email": "a@example.com"}),  # pdf_base64 missing
     ],
 )
-def test_broken_messages_are_dropped_not_requeued(mailed, routing_key, body):
+def test_given_broken_message_when_consumed_then_it_is_dropped_and_not_requeued(
+    mailed, routing_key, body
+):
+    # Arrange
     ch = _deliver(routing_key, body)
+
+    # Act and assert
     ch.basic_nack.assert_called_once_with(delivery_tag=11, requeue=False)
     ch.basic_ack.assert_not_called()
     assert mailed == [] and _logs() == []
 
 
-def test_consumer_retries_until_the_broker_is_reachable(monkeypatch):
+def test_given_unreachable_broker_when_consumer_runs_then_it_retries_until_broker_is_reachable(
+    monkeypatch,
+):
+    # Arrange
     attempts = []
+
+    # Act
     channel = MagicMock()
 
     def connect(params):
@@ -136,26 +171,36 @@ def test_consumer_retries_until_the_broker_is_reachable(monkeypatch):
 
     consumer.start_consumer()
 
+    # Assert
     assert len(attempts) == 3 and sleeps == [5, 5]
     channel.basic_consume.assert_called_once_with(
         queue="notification.queue", on_message_callback=consumer.process_message
     )
     bound = {c.kwargs["routing_key"] for c in channel.queue_bind.call_args_list}
+
+    # Act and assert
     assert {"auth.password-changed", "report.progress", "violation.alert"} <= bound
 
 
-def test_prepare_database_creates_tables_and_tolerates_sqlite(monkeypatch):
+def test_given_empty_database_when_prepared_then_tables_are_created_and_sqlite_is_tolerated(
+    monkeypatch,
+):
+    # Arrange
     fresh = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     monkeypatch.setattr(consumer, "engine", fresh)
     consumer.prepare_database()  # ALTER TYPE is Postgres-only; logged, not fatal
+
+    # Act and assert
     with fresh.connect() as conn:
         assert "notification_logs" in fresh.dialect.get_table_names(conn)
     fresh.dispose()
 
 
-def test_prepare_database_survives_create_all_failure(monkeypatch):
+def test_given_table_creation_fails_when_database_prepared_then_service_still_starts(
+    monkeypatch,
+):
     def broken(**kwargs):
         raise RuntimeError("db down")
 
@@ -164,7 +209,10 @@ def test_prepare_database_survives_create_all_failure(monkeypatch):
     consumer.prepare_database()
 
 
-def test_enum_migrations_run_on_postgres(monkeypatch):
+def test_given_postgres_when_database_prepared_then_enum_migrations_run_outside_a_transaction(
+    monkeypatch,
+):
+    # Arrange
     executed = []
 
     class Conn:
@@ -183,7 +231,11 @@ def test_enum_migrations_run_on_postgres(monkeypatch):
 
     monkeypatch.setattr(consumer.Base.metadata, "create_all", lambda **kw: None)
     monkeypatch.setattr(consumer, "engine", SimpleNamespace(connect=Conn))
+
+    # Act
     consumer.prepare_database()
+
+    # Assert
     assert executed[0] == ("options", {"isolation_level": "AUTOCOMMIT"})
     assert all("ADD VALUE IF NOT EXISTS" in s for s in executed[1:])
     assert len(executed) == 5
@@ -194,7 +246,10 @@ def test_enum_migrations_run_on_postgres(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_resend_error_that_is_not_json(monkeypatch):
+def test_given_resend_error_that_is_not_json_when_email_sent_then_delivery_error_is_raised(
+    monkeypatch,
+):
+    # Arrange
     class Response:
         status_code = 502
         text = "Bad Gateway"
@@ -204,11 +259,16 @@ def test_resend_error_that_is_not_json(monkeypatch):
 
     monkeypatch.setattr(email_service, "RESEND_API_KEY", "re_test")
     monkeypatch.setattr(email_service.httpx, "post", lambda *a, **k: Response())
+
+    # Act and assert
     with pytest.raises(email_service.EmailDeliveryError, match="502.*Bad Gateway"):
         email_service.send_email("a@example.com", "Hi", "<p>Hi</p>")
 
 
-def test_resend_error_without_a_message_uses_the_body(monkeypatch):
+def test_given_resend_error_without_message_when_email_sent_then_response_body_is_used(
+    monkeypatch,
+):
+    # Arrange
     class Response:
         status_code = 422
         text = "invalid from"
@@ -218,6 +278,8 @@ def test_resend_error_without_a_message_uses_the_body(monkeypatch):
 
     monkeypatch.setattr(email_service, "RESEND_API_KEY", "re_test")
     monkeypatch.setattr(email_service.httpx, "post", lambda *a, **k: Response())
+
+    # Act and assert
     with pytest.raises(email_service.EmailDeliveryError, match="invalid from"):
         email_service.send_email("a@example.com", "Hi", "<p>Hi</p>")
 
@@ -236,14 +298,16 @@ def _auth(role: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_health():
+def test_given_running_service_when_health_requested_then_reports_ok():
+    # Act and assert
     assert client.get("/health").json() == {
         "status": "ok",
         "service": "notification_service",
     }
 
 
-def test_notification_route_is_for_notification_managers():
+def test_given_non_manager_or_no_token_when_notification_route_called_then_403_or_401():
+    # Act and assert
     assert client.get(
         "/notification", headers=_auth("notification_manager")
     ).json() == {"message": "Welcome Notification Manager"}
@@ -251,18 +315,23 @@ def test_notification_route_is_for_notification_managers():
     assert client.get("/notification").status_code == 401
 
 
-def test_startup_creates_tables(monkeypatch):
+def test_given_service_starting_when_startup_runs_then_tables_are_created(monkeypatch):
+    # Arrange
     fresh = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     monkeypatch.setattr(main, "engine", fresh)
     main.on_startup()
+
+    # Act and assert
     with fresh.connect() as conn:
         assert "notification_logs" in fresh.dialect.get_table_names(conn)
     fresh.dispose()
 
 
-def test_startup_survives_create_all_failure(monkeypatch):
+def test_given_table_creation_fails_when_startup_runs_then_service_still_starts(
+    monkeypatch,
+):
     def broken(**kwargs):
         raise RuntimeError("db down")
 

@@ -20,7 +20,8 @@ def setup_db(monkeypatch):
     Base.metadata.drop_all(bind=test_engine)
 
 
-def test_process_otp_requested_success():
+def test_given_otp_requested_event_when_consumed_then_otp_email_is_sent():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 1
@@ -35,6 +36,7 @@ def test_process_otp_requested_success():
         }
     )
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -59,7 +61,8 @@ def test_process_otp_requested_success():
         db.close()
 
 
-def test_process_payment_success():
+def test_given_payment_success_event_when_consumed_then_confirmation_email_is_sent():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 2
@@ -75,6 +78,7 @@ def test_process_payment_success():
         }
     )
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -97,7 +101,8 @@ def test_process_payment_success():
         db.close()
 
 
-def test_process_certificate_issued():
+def test_given_certificate_issued_event_when_consumed_then_certificate_email_is_sent():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 3
@@ -113,6 +118,7 @@ def test_process_certificate_issued():
         }
     )
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -134,7 +140,8 @@ def test_process_certificate_issued():
         db.close()
 
 
-def test_process_proctoring_violation():
+def test_given_proctoring_violation_event_when_consumed_then_alert_email_is_sent():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 4
@@ -148,6 +155,7 @@ def test_process_proctoring_violation():
         }
     )
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -168,7 +176,8 @@ def test_process_proctoring_violation():
         db.close()
 
 
-def test_email_failure_acks_and_logs_failed():
+def test_given_email_sending_fails_when_event_consumed_then_message_is_acknowledged_and_failure_logged():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 5
@@ -184,6 +193,7 @@ def test_email_failure_acks_and_logs_failed():
         }
     )
 
+    # Act and assert
     with patch(
         "consumer.send_email",
         side_effect=EmailDeliveryError("Resend Unreachable"),
@@ -208,7 +218,8 @@ def test_email_failure_acks_and_logs_failed():
         db.close()
 
 
-def test_missing_email_acks_without_processing():
+def test_given_event_without_email_address_when_consumed_then_message_is_acknowledged_without_processing():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 6
@@ -216,6 +227,7 @@ def test_missing_email_acks_without_processing():
 
     body = json.dumps({"course_title": "No Email Course"})
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -223,7 +235,8 @@ def test_missing_email_acks_without_processing():
         mock_ch.basic_ack.assert_called_once_with(delivery_tag=6)
 
 
-def test_unhandled_routing_key_acks():
+def test_given_unhandled_routing_key_when_consumed_then_message_is_acknowledged():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 7
@@ -231,6 +244,7 @@ def test_unhandled_routing_key_acks():
 
     body = json.dumps({"email": "test@example.com"})
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -238,7 +252,8 @@ def test_unhandled_routing_key_acks():
         mock_ch.basic_ack.assert_called_once_with(delivery_tag=7)
 
 
-def test_start_consumer():
+def test_given_consumer_when_started_then_it_binds_the_notification_queue():
+    # Act and assert
     with patch("pika.BlockingConnection") as mock_pika_conn:
         mock_conn = MagicMock()
         mock_channel = MagicMock()
@@ -256,7 +271,8 @@ def test_start_consumer():
         mock_channel.start_consuming.assert_called_once()
 
 
-def test_process_progress_report_attaches_pdf():
+def test_given_progress_report_event_when_consumed_then_email_has_a_pdf_attached():
+    # Arrange
     import base64
 
     mock_ch = MagicMock()
@@ -275,6 +291,7 @@ def test_process_progress_report_attaches_pdf():
         }
     )
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -303,7 +320,8 @@ def test_process_progress_report_attaches_pdf():
         db.close()
 
 
-def test_process_email_verification_sends_the_link():
+def test_given_email_verification_event_when_consumed_then_verification_link_is_sent():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 11
@@ -318,6 +336,7 @@ def test_process_email_verification_sends_the_link():
         }
     )
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -341,7 +360,8 @@ def test_process_email_verification_sends_the_link():
         db.close()
 
 
-def test_password_reset_email_includes_reset_link():
+def test_given_password_reset_event_when_consumed_then_email_includes_the_reset_link():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 12
@@ -356,6 +376,7 @@ def test_password_reset_email_includes_reset_link():
         }
     )
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
@@ -368,7 +389,8 @@ def test_password_reset_email_includes_reset_link():
         mock_ch.basic_ack.assert_called_once_with(delivery_tag=12)
 
 
-def test_password_reset_email_uses_default_values():
+def test_given_password_reset_event_without_optional_fields_when_consumed_then_defaults_are_used():
+    # Arrange
     mock_ch = MagicMock()
     mock_method = MagicMock()
     mock_method.delivery_tag = 13
@@ -376,6 +398,7 @@ def test_password_reset_email_uses_default_values():
 
     body = json.dumps({"user_id": 78, "email": "defaults@example.com"})
 
+    # Act and assert
     with patch("consumer.send_email") as mock_send:
         process_message(mock_ch, mock_method, None, body)
 
