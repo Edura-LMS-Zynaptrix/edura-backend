@@ -33,3 +33,13 @@ exclude = '''
   | dist
 )/
 '''
+
+[tool.coverage.run]
+# Coverage is measured on production code only. The test files live inside each service
+# folder and the Alembic migrations are scaffolding, so counting them inflates the line
+# figure (tests always run) and dilutes the branch figure (migration branches).
+omit = [
+    "*/tests/*",
+    "*/alembic/*",
+    "*/conftest.py",
+]
