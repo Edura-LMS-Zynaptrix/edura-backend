@@ -84,13 +84,19 @@ def setup_db():
             pass
 
 
-def test_token_service_create_and_verify():
+def test_given_user_when_token_created_then_it_verifies_with_the_same_claims():
+    # Act
     token = TokenService.create_access_token(user_id=1, role="STUDENT")
+
+    # Assert
     assert isinstance(token, str)
 
 
-def test_otp_service_generate_and_verify():
+def test_given_generated_otp_when_verified_then_it_is_accepted_and_expiry_is_enforced():
+    # Arrange
     code = OtpService.generate_otp(user_id=100, purpose="email_verify")
+
+    # Act and assert
     assert len(code) == 6
     assert code.isdigit()
 
@@ -98,22 +104,31 @@ def test_otp_service_generate_and_verify():
     assert OtpService.verify_otp(user_id=100, code=code, purpose="email_verify") is True
 
     # Verifying again should fail with OTP_EXPIRED because it's deleted after use
+    # Act and assert
     with pytest.raises(Exception) as exc_info:
         OtpService.verify_otp(user_id=100, code=code, purpose="email_verify")
+
+    # Act and assert
     assert "OTP_EXPIRED" in str(exc_info.value.detail)
 
 
-def test_session_service_limit():
+def test_given_user_with_three_sessions_when_a_fourth_is_created_then_session_is_created():
+    # Arrange
     user_id = 99
     _s1 = SessionService.create_session(user_id, "STUDENT")
     _s2 = SessionService.create_session(user_id, "STUDENT")
     _s3 = SessionService.create_session(user_id, "STUDENT")
+
+    # Act
     s4 = SessionService.create_session(user_id, "STUDENT")
+
+    # Assert
     assert s4 is not None
 
 
-def test_register_and_login_success():
+def test_given_registered_user_when_logging_in_then_unverified_is_refused_and_verified_succeeds():
     # Register user
+    # Act
     reg_resp = client.post(
         "/register",
         json={
@@ -122,36 +137,55 @@ def test_register_and_login_success():
             "role": "student",
         },
     )
+
+    # Assert
     assert reg_resp.status_code == 200
+
+    # Act
     data = reg_resp.json()
+
+    # Assert
     assert data["email"] == "student@edura.com"
     assert data["is_email_verified"] is False
 
     # Login is refused until the emailed link has been followed
+    # Act
     blocked = client.post(
         "/login",
         json={"email": "student@edura.com", "password": "Password@123"},
     )
+
+    # Assert
     assert blocked.status_code == 403
     assert blocked.json()["detail"]["error"] == "EMAIL_NOT_VERIFIED"
+
+    # Act and assert
     assert (
         client.post("/verify-email", json={"token": _verification_token()}).status_code
         == 200
     )
 
     # Login user
+    # Act
     login_resp = client.post(
         "/login",
         json={"email": "student@edura.com", "password": "Password@123"},
     )
+
+    # Assert
     assert login_resp.status_code == 200
+
+    # Act
     token_data = login_resp.json()
+
+    # Assert
     assert "access_token" in token_data
     assert token_data["expires_in"] == 900
     assert "refresh_token" in login_resp.cookies
 
 
-def test_login_invalid_credentials():
+def test_given_wrong_password_when_logging_in_then_401_invalid_credentials():
+    # Arrange
     client.post(
         "/register",
         json={
@@ -161,16 +195,20 @@ def test_login_invalid_credentials():
         },
     )
 
+    # Act
     resp = client.post(
         "/login",
         json={"email": "teacher@edura.com", "password": "wrongpassword"},
     )
+
+    # Assert
     assert resp.status_code == 401
     assert resp.json()["detail"]["error"] == "INVALID_CREDENTIALS"
 
 
-def test_refresh_token_rotation_and_reuse():
+def test_given_rotated_refresh_token_when_reused_then_401_token_reuse():
     # Register & Login
+    # Arrange
     _register_verified("admin@edura.com", role="admin")
     login_resp = client.post(
         "/login",
@@ -179,19 +217,30 @@ def test_refresh_token_rotation_and_reuse():
     initial_refresh_token = login_resp.cookies["refresh_token"]
 
     # First refresh call - Success
+    # Act
     ref_resp = client.post("/refresh", json={"refresh_token": initial_refresh_token})
+
+    # Assert
     assert ref_resp.status_code == 200
+
+    # Act
     new_access_token = ref_resp.json()["access_token"]
+
+    # Assert
     assert new_access_token is not None
 
     # Reuse of initial refresh token - Should fail with REFRESH_TOKEN_REUSE
+    # Act
     reuse_resp = client.post("/refresh", json={"refresh_token": initial_refresh_token})
+
+    # Assert
     assert reuse_resp.status_code == 401
     assert reuse_resp.json()["detail"]["error"] == "REFRESH_TOKEN_REUSE"
 
 
-def test_protected_route_role_enforcement():
+def test_given_student_token_when_calling_protected_and_admin_routes_then_admin_is_forbidden():
     # Register Student
+    # Arrange
     _register_verified("user@edura.com")
     login_resp = client.post(
         "/login",
@@ -201,27 +250,40 @@ def test_protected_route_role_enforcement():
 
     # Access protected route with Bearer token
     headers = {"Authorization": f"Bearer {access_token}"}
+
+    # Act
     prot_resp = client.get("/protected", headers=headers)
+
+    # Assert
     assert prot_resp.status_code == 200
     assert prot_resp.json()["role"] == "STUDENT"
 
     # Access admin route with student token - Should fail with 403 INSUFFICIENT_PERMISSIONS
+    # Act
     admin_resp = client.get("/admin", headers=headers)
+
+    # Assert
     assert admin_resp.status_code == 403
     assert admin_resp.json()["detail"]["error"] == "INSUFFICIENT_PERMISSIONS"
 
 
-def test_missing_and_expired_token():
+def test_given_missing_or_expired_token_when_calling_protected_route_then_401():
     # Missing token
+    # Act
     resp_no_token = client.get("/protected")
+
+    # Assert
     assert resp_no_token.status_code == 401
     assert resp_no_token.json()["detail"]["error"] == "MISSING_TOKEN"
 
 
-def test_register_rejects_weak_password():
+def test_given_weak_password_when_registering_then_422():
+    # Act
     resp = client.post(
         "/register", json={"email": "weak@edura.com", "password": "password123"}
     )
+
+    # Assert
     assert resp.status_code == 422
 
 
@@ -233,25 +295,33 @@ def _request_reset(email: str):
     return resp, publish
 
 
-def test_forgot_password_does_not_reveal_unknown_emails():
+def test_given_unknown_email_when_requesting_password_reset_then_response_does_not_reveal_it():
+    # Arrange
     client.post(
         "/register", json={"email": "known@edura.com", "password": "Password@123"}
     )
     known, published = _request_reset("known@edura.com")
+
+    # Act
     unknown, not_published = _request_reset("nobody@edura.com")
 
+    # Assert
     assert known.status_code == unknown.status_code == 200
     assert known.json() == unknown.json()
     published.assert_called_once()
+
     not_published.assert_not_called()
 
     routing_key, payload = published.call_args.args
+
+    # Act and assert
     assert routing_key == "auth.password-reset-requested"
     assert payload["email"] == "known@edura.com"
     assert "/reset-password?token=" in payload["reset_url"]
 
 
-def test_reset_password_flow_is_single_use_and_signs_out():
+def test_given_reset_link_when_used_then_password_changes_once_and_sessions_are_signed_out():
+    # Arrange
     email = "reset@edura.com"
     _register_verified(email)
     old_refresh = client.post(
@@ -261,6 +331,7 @@ def test_reset_password_flow_is_single_use_and_signs_out():
     _, published = _request_reset(email)
     token = published.call_args.args[1]["reset_url"].split("token=", 1)[1]
 
+    # Act
     mismatch = client.post(
         "/reset-password",
         json={
@@ -269,10 +340,13 @@ def test_reset_password_flow_is_single_use_and_signs_out():
             "confirm_password": "Other@456",
         },
     )
+
+    # Assert
     assert mismatch.status_code == 422
 
     from unittest.mock import patch
 
+    # Act
     with patch("router.publish_event"):
         ok = client.post(
             "/reset-password",
@@ -282,8 +356,11 @@ def test_reset_password_flow_is_single_use_and_signs_out():
                 "confirm_password": "NewPass@456",
             },
         )
+
+    # Assert
     assert ok.status_code == 200
 
+    # Act and assert
     assert (
         client.post(
             "/login", json={"email": email, "password": "Password@123"}
@@ -298,6 +375,7 @@ def test_reset_password_flow_is_single_use_and_signs_out():
     )
 
     # The link can't be replayed, and sessions from before the reset are gone.
+    # Act
     replay = client.post(
         "/reset-password",
         json={
@@ -306,14 +384,19 @@ def test_reset_password_flow_is_single_use_and_signs_out():
             "confirm_password": "Again@789",
         },
     )
+
+    # Assert
     assert replay.status_code == 400
     assert replay.json()["detail"]["error"] == "INVALID_RESET_TOKEN"
+
+    # Act and assert
     assert (
         client.post("/refresh", json={"refresh_token": old_refresh}).status_code == 401
     )
 
 
-def test_reset_password_rejects_garbage_token():
+def test_given_garbage_token_when_resetting_password_then_400():
+    # Act
     resp = client.post(
         "/reset-password",
         json={
@@ -322,10 +405,13 @@ def test_reset_password_rejects_garbage_token():
             "confirm_password": "NewPass@456",
         },
     )
+
+    # Assert
     assert resp.status_code == 400
 
 
-def test_logout_revokes_refresh_token():
+def test_given_logged_in_user_when_logging_out_then_refresh_token_is_revoked():
+    # Arrange
     email = "logout@edura.com"
     _register_verified(email)
     refresh = client.post(
@@ -333,10 +419,15 @@ def test_logout_revokes_refresh_token():
     ).cookies["refresh_token"]
 
     client.cookies.set("refresh_token", refresh)
+
+    # Act
     resp = client.post("/logout")
     client.cookies.clear()
 
+    # Assert
     assert resp.status_code == 200
+
+    # Act and assert
     assert client.post("/refresh", json={"refresh_token": refresh}).status_code == 401
 
 
@@ -345,20 +436,26 @@ def test_logout_revokes_refresh_token():
 # ---------------------------------------------------------------------------
 
 
-def test_register_sends_a_verification_link():
+def test_given_new_user_when_registering_then_verification_link_is_sent():
+    # Act
     resp = client.post(
         "/register", json={"email": "newbie@edura.com", "password": "Password@123"}
     )
+
+    # Assert
     assert resp.status_code == 200
 
     key, payload = PUBLISHED[-1]
+
+    # Act and assert
     assert key == "auth.email-verification-requested"
     assert payload["email"] == "newbie@edura.com"
     assert "/verify-email?token=" in payload["verify_url"]
     assert payload["expires_in_minutes"] == 1440
 
 
-def test_unverified_login_hides_whether_the_address_exists():
+def test_given_unverified_account_when_logging_in_then_response_does_not_reveal_it_exists():
+    # Arrange
     client.post(
         "/register", json={"email": "probe@edura.com", "password": "Password@123"}
     )
@@ -366,25 +463,34 @@ def test_unverified_login_hides_whether_the_address_exists():
     wrong = client.post(
         "/login", json={"email": "probe@edura.com", "password": "Wrong@123"}
     )
+
+    # Act
     unknown = client.post(
         "/login", json={"email": "ghost@edura.com", "password": "Wrong@123"}
     )
     # Without the right password the answer is the same as for an unknown address
+    # Assert
     assert wrong.status_code == unknown.status_code == 401
     assert wrong.json()["detail"]["error"] == "INVALID_CREDENTIALS"
 
 
-def test_verification_link_is_reusable_but_only_for_verification():
+def test_given_verification_link_when_reused_then_it_works_for_verification_only():
+    # Arrange
     client.post(
         "/register", json={"email": "twice@edura.com", "password": "Password@123"}
     )
     token = _verification_token()
+
+    # Act and assert
     assert client.post("/verify-email", json={"token": token}).status_code == 200
     assert (
         client.post("/verify-email", json={"token": token}).status_code == 200
     )  # harmless
 
+    # Act
     invalid = client.post("/verify-email", json={"token": "not-a-token"})
+
+    # Assert
     assert invalid.status_code == 400
     assert invalid.json()["detail"]["error"] == "INVALID_VERIFICATION_TOKEN"
 
@@ -392,25 +498,35 @@ def test_verification_link_is_reusable_but_only_for_verification():
     from services import PasswordResetService
 
     reset = PasswordResetService.create_token(1, "hash")
+
+    # Act and assert
     assert client.post("/verify-email", json={"token": reset}).status_code == 400
     login = TokenService.create_access_token(user_id=1, role="STUDENT")
+
+    # Act and assert
     assert client.post("/verify-email", json={"token": login}).status_code == 400
 
 
-def test_expired_verification_link_is_rejected(monkeypatch):
+def test_given_expired_verification_link_when_verifying_then_400(monkeypatch):
+    # Arrange
     import config
 
     monkeypatch.setattr(config.settings, "EMAIL_VERIFICATION_EXPIRE_MINUTES", -1)
     client.post(
         "/register", json={"email": "late@edura.com", "password": "Password@123"}
     )
+
+    # Act and assert
     assert (
         client.post("/verify-email", json={"token": _verification_token()}).status_code
         == 400
     )
 
 
-def test_resend_verification(monkeypatch):
+def test_given_unverified_account_when_resending_verification_then_new_link_verifies_it(
+    monkeypatch,
+):
+    # Arrange
     from services import MemoryRedisClient
 
     monkeypatch.setattr("services.redis_client", MemoryRedisClient())
@@ -419,7 +535,10 @@ def test_resend_verification(monkeypatch):
     )
     PUBLISHED.clear()
 
+    # Act
     first = client.post("/resend-verification", json={"email": "resend@edura.com"})
+
+    # Assert
     assert first.status_code == 200
     assert (
         len(PUBLISHED) == 1 and PUBLISHED[0][0] == "auth.email-verification-requested"
@@ -427,18 +546,27 @@ def test_resend_verification(monkeypatch):
 
     # a second request straight away is answered the same but sends nothing
     again = client.post("/resend-verification", json={"email": "resend@edura.com"})
+
+    # Act
     unknown = client.post("/resend-verification", json={"email": "nobody@edura.com"})
+
+    # Assert
     assert again.json() == first.json() == unknown.json()
     assert len(PUBLISHED) == 1
 
     # nothing is sent once the account is verified
+    # Act and assert
     assert (
         client.post("/verify-email", json={"token": _verification_token()}).status_code
         == 200
     )
     monkeypatch.setattr("services.redis_client", MemoryRedisClient())
+
+    # Act
     client.post("/resend-verification", json={"email": "resend@edura.com"})
     emails = [k for k, _ in PUBLISHED if k == "auth.email-verification-requested"]
+
+    # Assert
     assert len(emails) == 1
 
 
@@ -446,7 +574,8 @@ def _events(key: str) -> list[dict]:
     return [payload for k, payload in PUBLISHED if k == key]
 
 
-def test_register_announces_the_account_with_its_profile():
+def test_given_registration_with_profile_when_registering_then_account_and_profile_are_announced():
+    # Act
     resp = client.post(
         "/register",
         json={
@@ -462,9 +591,13 @@ def test_register_announces_the_account_with_its_profile():
             },
         },
     )
+
+    # Assert
     assert resp.status_code == 200
 
     (registered,) = _events("auth.user-registered")
+
+    # Act and assert
     assert registered["user_id"] == resp.json()["id"]
     assert registered["email"] == "full@edura.com"
     assert registered["role"] == "student" and registered["is_email_verified"] is False
@@ -475,50 +608,76 @@ def test_register_announces_the_account_with_its_profile():
     assert _events("auth.email-verification-requested")
 
 
-def test_register_without_a_profile_announces_the_account_only():
+def test_given_registration_without_profile_when_registering_then_only_the_account_is_announced():
+    # Arrange
     client.post(
         "/register", json={"email": "bare@edura.com", "password": "Password@123"}
     )
+
+    # Act
     (registered,) = _events("auth.user-registered")
+
+    # Assert
     assert registered["profile"] is None
 
 
-def test_register_rejects_an_invalid_profile_before_announcing_anything():
+def test_given_invalid_profile_when_registering_then_422_and_nothing_is_announced():
+    # Arrange
     body = {
         "email": "badprofile@edura.com",
         "password": "Password@123",
         "profile": {"first_name": "A", "last_name": "B", "mobile_no": "not-a-number"},
     }
+
+    # Act and assert
     assert client.post("/register", json=body).status_code == 422
+
+    # Act and assert
     assert PUBLISHED == []
 
     # nothing was created, so the same address is still free
     body["profile"]["mobile_no"] = "0771234567"
+
+    # Act and assert
     assert client.post("/register", json=body).status_code == 200
 
 
-def test_register_does_not_depend_on_any_other_service(monkeypatch):
+def test_given_broker_down_when_registering_then_account_is_still_created(monkeypatch):
     """The broker being down must not stop an account being created."""
+    # Arrange
     monkeypatch.setattr("router.publish_event", lambda key, payload: False)
+
+    # Act
     resp = client.post(
         "/register", json={"email": "offline@edura.com", "password": "Password@123"}
     )
+
+    # Assert
     assert resp.status_code == 200
 
 
-def test_account_changes_are_announced():
+def test_given_account_changes_when_verified_or_deactivated_then_each_change_is_announced():
+    # Arrange
     client.post(
         "/register", json={"email": "changes@edura.com", "password": "Password@123"}
     )
     user_id = _events("auth.user-registered")[0]["user_id"]
 
     client.post("/verify-email", json={"token": _verification_token()})
+
+    # Act
     verified = _events("auth.account-updated")[-1]
+
+    # Assert
     assert verified["user_id"] == user_id and verified["is_email_verified"] is True
 
     admin = _token_for_admin()
     client.put(f"/users/{user_id}/status", json={"is_active": False}, headers=admin)
+
+    # Act
     deactivated = _events("auth.account-updated")[-1]
+
+    # Assert
     assert deactivated["is_active"] is False
 
 
@@ -527,7 +686,10 @@ def _token_for_admin() -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_google_sign_in_verifies_and_drops_an_unverified_password(monkeypatch):
+def test_given_unverified_password_account_when_signing_in_with_google_then_it_is_verified_and_password_dropped(
+    monkeypatch,
+):
+    # Arrange
     client.post(
         "/register", json={"email": "hijack@edura.com", "password": "Attacker@123"}
     )
@@ -541,19 +703,27 @@ def test_google_sign_in_verifies_and_drops_an_unverified_password(monkeypatch):
     monkeypatch.setattr(
         "router.GoogleAuthService.verify_access_token", lambda token: info
     )
+
+    # Act and assert
     assert client.post("/google", json={"access_token": "x"}).status_code == 200
 
     # the password typed in by whoever registered first no longer works
+    # Act
     login = client.post(
         "/login", json={"email": "hijack@edura.com", "password": "Attacker@123"}
     )
+
+    # Assert
     assert (
         login.status_code == 400
         and login.json()["detail"]["error"] == "GOOGLE_ONLY_ACCOUNT"
     )
 
 
-def test_google_without_a_verified_address_does_not_verify(monkeypatch):
+def test_given_google_account_without_verified_address_when_signing_in_then_account_is_not_verified(
+    monkeypatch,
+):
+    # Arrange
     client.post(
         "/register", json={"email": "unsure@edura.com", "password": "Password@123"}
     )
@@ -568,21 +738,28 @@ def test_google_without_a_verified_address_does_not_verify(monkeypatch):
         "router.GoogleAuthService.verify_access_token", lambda token: info
     )
     client.post("/google", json={"access_token": "x"})
+
+    # Act
     login = client.post(
         "/login", json={"email": "unsure@edura.com", "password": "Password@123"}
     )
+
+    # Assert
     assert (
         login.status_code == 403
         and login.json()["detail"]["error"] == "EMAIL_NOT_VERIFIED"
     )
 
 
-def test_password_reset_proves_the_address():
+def test_given_unverified_account_when_password_reset_then_address_is_verified():
+    # Arrange
     client.post(
         "/register", json={"email": "stuck@edura.com", "password": "Password@123"}
     )
     _, published = _request_reset("stuck@edura.com")
     token = published.call_args.args[1]["reset_url"].split("token=", 1)[1]
+
+    # Act
     done = client.post(
         "/reset-password",
         json={
@@ -591,7 +768,11 @@ def test_password_reset_proves_the_address():
             "confirm_password": "NewPass@456",
         },
     )
+
+    # Assert
     assert done.status_code == 200
+
+    # Act and assert
     assert (
         client.post(
             "/login", json={"email": "stuck@edura.com", "password": "NewPass@456"}
@@ -600,7 +781,10 @@ def test_password_reset_proves_the_address():
     )
 
 
-def test_new_google_account_is_announced_with_the_google_name_and_photo(monkeypatch):
+def test_given_new_google_account_when_signing_in_then_it_is_announced_with_google_name_and_photo(
+    monkeypatch,
+):
+    # Arrange
     info = {
         "google_id": "g-new",
         "email": "fresh@edura.com",
@@ -611,9 +795,14 @@ def test_new_google_account_is_announced_with_the_google_name_and_photo(monkeypa
     monkeypatch.setattr(
         "router.GoogleAuthService.verify_access_token", lambda token: info
     )
+
+    # Act and assert
     assert client.post("/google", json={"access_token": "x"}).status_code == 200
 
+    # Act
     (registered,) = _events("auth.user-registered")
+
+    # Assert
     assert registered["email"] == "fresh@edura.com"
     assert registered["is_email_verified"] is True
     assert registered["profile"] == {
@@ -623,7 +812,8 @@ def test_new_google_account_is_announced_with_the_google_name_and_photo(monkeypa
     }
 
 
-def test_admin_created_by_admin_is_announced_with_a_profile():
+def test_given_admin_when_creating_admin_then_new_admin_is_announced_with_profile():
+    # Act
     resp = client.post(
         "/admin/create-admin",
         json={
@@ -634,7 +824,13 @@ def test_admin_created_by_admin_is_announced_with_a_profile():
         },
         headers=_token_for_admin(),
     )
+
+    # Assert
     assert resp.status_code == 201
+
+    # Act
     (registered,) = _events("auth.user-registered")
+
+    # Assert
     assert registered["role"] == "admin" and registered["is_email_verified"] is True
     assert registered["profile"] == {"first_name": "New", "last_name": "Admin"}

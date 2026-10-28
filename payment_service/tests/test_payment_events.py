@@ -86,27 +86,46 @@ def _course(session, course_id, price):
     )
 
 
-def test_the_course_price_copy_follows_catalogue_events(env):
+def test_given_course_price_copy_when_catalogue_events_arrive_then_copy_updated_and_deleted(
+    env,
+):
+    # Arrange
     _, session, _ = env
     _course(session, 5, 1500)
+
+    # Act and assert
     assert float(session().get(ReplicaCourse, 5).price) == 1500
+
     event_consumer.handle(
         "course.upserted",
         {"id": 5, "title": "Maths", "price": 900, "status": "PUBLISHED"},
     )
+
+    # Act and assert
     assert float(session().get(ReplicaCourse, 5).price) == 900
+
     event_consumer.handle("course.deleted", {"id": 5})
+
+    # Act and assert
     assert session().get(ReplicaCourse, 5) is None
 
 
-def test_free_enrollment_is_decided_from_the_local_price(env):
+def test_given_free_paid_and_unknown_courses_when_free_enroll_then_decided_from_local_price(
+    env,
+):
+    # Arrange
     client, session, sent = env
     _course(session, 1, 0)
     _course(session, 2, 2500)
 
+    # Act
     free = client.post("/free-enroll", json={"course_id": 1}, headers=_auth(7))
+
+    # Assert
     assert free.status_code == 200
     key, payload = sent[-1]
+
+    # Act and assert
     assert key == "payment.success" and payload["order_id"].startswith("FREE-")
     assert (
         payload["student_id"] == 7
@@ -115,31 +134,52 @@ def test_free_enrollment_is_decided_from_the_local_price(env):
     )
     assert payload["payment_id"] and payload["completed_at"]
 
+    # Act
     paid = client.post("/free-enroll", json={"course_id": 2}, headers=_auth(7))
+
+    # Assert
     assert (
         paid.status_code == 400 and paid.json()["detail"]["error"] == "COURSE_NOT_FREE"
     )
+
+    # Act
     unknown = client.post("/free-enroll", json={"course_id": 99}, headers=_auth(7))
+
+    # Assert
     assert (
         unknown.status_code == 404
         and unknown.json()["detail"]["error"] == "COURSE_NOT_FOUND"
     )
 
 
-def test_receipt_is_checked_by_its_bytes_stored_and_announced(env):
+def test_given_pdf_and_fake_pdf_when_receipt_uploaded_then_real_one_stored_and_fake_refused(
+    env,
+):
+    # Arrange
     client, session, sent = env
 
+    # Act
     ok = client.post(
         "/receipts",
         data={"course_id": 3, "amount": 1500},
         files={"file": ("slip.pdf", PDF, "application/pdf")},
         headers=_auth(7),
     )
+
+    # Assert
     assert ok.status_code == 201
+
+    # Act
     body = ok.json()
+
+    # Assert
     assert body["receipt_url"] == "https://res.cloudinary.com/demo/receipt.pdf"
     assert body["receipt_public_id"] == "edura/receipts/stored"
+
+    # Act
     stored = session().query(PaymentReceipt).one()
+
+    # Assert
     assert stored.receipt_public_id == "edura/receipts/stored"
     assert (
         "payment.receipt-uploaded",
@@ -147,12 +187,15 @@ def test_receipt_is_checked_by_its_bytes_stored_and_announced(env):
     ) in sent
 
     # a file that only claims to be a PDF is refused, and nothing is created for it
+    # Act
     fake = client.post(
         "/receipts",
         data={"course_id": 3, "amount": 1500},
         files={"file": ("slip.pdf", b"MZ not a pdf", "application/pdf")},
         headers=_auth(7),
     )
+
+    # Assert
     assert (
         fake.status_code == 415
         and fake.json()["detail"]["error"] == "UNSUPPORTED_FILE_TYPE"
@@ -160,7 +203,10 @@ def test_receipt_is_checked_by_its_bytes_stored_and_announced(env):
     assert session().query(PaymentReceipt).count() == 1
 
 
-def test_approving_a_receipt_announces_the_payment_and_the_review(env):
+def test_given_uploaded_receipt_when_admin_approves_then_payment_and_review_announced(
+    env,
+):
+    # Arrange
     client, session, sent = env
     client.post(
         "/receipts",
@@ -171,28 +217,37 @@ def test_approving_a_receipt_announces_the_payment_and_the_review(env):
     receipt = session().query(PaymentReceipt).one()
     sent.clear()
 
+    # Act
     r = client.put(
         f"/receipts/{receipt.id}/verify",
         json={"status": "verified"},
         headers=_auth(1, "admin"),
     )
 
+    # Assert
     assert r.status_code == 200
     keys = [k for k, _ in sent]
+
+    # Act and assert
     assert keys == ["payment.success", "payment.receipt-reviewed"]
     success = sent[0][1]
+
+    # Act and assert
     assert (
         success["order_id"] == f"MANUAL-{receipt.payment_id}"
         and success["amount"] == 1500
     )
     assert sent[1][1]["status"] == "APPROVED" and sent[1][1]["student_id"] == 7
+
+    # Act and assert
     assert (
         session().get(Payment, receipt.payment_id).payment_status
         == PaymentStatus.SUCCESS
     )
 
 
-def test_rejecting_a_receipt_announces_only_the_review(env):
+def test_given_uploaded_receipt_when_admin_rejects_then_only_review_announced(env):
+    # Arrange
     client, session, sent = env
     client.post(
         "/receipts",
@@ -203,12 +258,14 @@ def test_rejecting_a_receipt_announces_only_the_review(env):
     receipt = session().query(PaymentReceipt).one()
     sent.clear()
 
+    # Act
     r = client.put(
         f"/receipts/{receipt.id}/verify",
         json={"status": "rejected", "rejection_reason": "blurry"},
         headers=_auth(1, "admin"),
     )
 
+    # Assert
     assert r.status_code == 200
     assert [k for k, _ in sent] == ["payment.receipt-reviewed"]
     assert sent[0][1]["status"] == "REJECTED"

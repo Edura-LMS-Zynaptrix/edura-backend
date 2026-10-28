@@ -42,12 +42,17 @@ def clean_database(engine):
             conn.execute(text(f"DROP TYPE IF EXISTS {enum_name} CASCADE"))
 
 
-def test_migration_lifecycle(engine):
+def test_given_clean_database_when_migrated_up_down_and_up_again_then_schema_is_created_removed_and_recreated(
+    engine,
+):
     # 1. Clean the database first
+    # Arrange
     clean_database(engine)
 
     # 2. Check no tables exist
     inspector = inspect(engine)
+
+    # Act and assert
     assert len(inspector.get_table_names()) == 0, "Database is not clean"
 
     # 3. Configure Alembic dynamically
@@ -90,9 +95,13 @@ def test_migration_lifecycle(engine):
 
     # 7. Verify all tables are removed (except possibly alembic_version, but usually even alembic_version is empty or gone)
     inspector = inspect(engine)
+
+    # Act
     remaining_tables = [
         t for t in inspector.get_table_names() if t != "alembic_version"
     ]
+
+    # Assert
     assert (
         len(remaining_tables) == 0
     ), f"Some tables remained after downgrade: {remaining_tables}"

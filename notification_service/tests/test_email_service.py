@@ -21,7 +21,8 @@ def _response(status=200, body=None):
     return response
 
 
-def test_send_email_posts_to_resend_with_the_api_key():
+def test_given_api_key_when_email_sent_then_request_is_posted_to_resend_with_the_key():
+    # Act
     with patch("email_service.httpx.post", return_value=_response()) as post:
         send_email(
             to_email="recipient@example.com",
@@ -29,6 +30,7 @@ def test_send_email_posts_to_resend_with_the_api_key():
             html_body="<h1>Test</h1>",
         )
 
+    # Assert
     post.assert_called_once()
     assert post.call_args.args[0] == "https://api.resend.com/emails"
     assert post.call_args.kwargs["headers"] == {"Authorization": "Bearer re_test_key"}
@@ -40,7 +42,8 @@ def test_send_email_posts_to_resend_with_the_api_key():
     }
 
 
-def test_send_email_with_pdf_attachment():
+def test_given_pdf_when_email_sent_then_attachment_is_included_in_the_request():
+    # Arrange
     with patch("email_service.httpx.post", return_value=_response()) as post:
         send_email(
             to_email="recipient@example.com",
@@ -52,32 +55,44 @@ def test_send_email_with_pdf_attachment():
         )
 
     (attachment,) = post.call_args.kwargs["json"]["attachments"]
+
+    # Act and assert
     assert attachment["filename"] == "report.pdf"
     assert base64.b64decode(attachment["content"]) == b"%PDF-1.4 test"
 
 
-def test_no_attachments_key_when_there_are_none():
+def test_given_no_attachments_when_email_sent_then_request_has_no_attachments_key():
+    # Act
     with patch("email_service.httpx.post", return_value=_response()) as post:
         send_email("a@example.com", "Hi", "<p>x</p>")
+
+    # Assert
     assert "attachments" not in post.call_args.kwargs["json"]
 
 
-def test_missing_api_key_fails_clearly_without_calling_resend(monkeypatch):
+def test_given_missing_api_key_when_email_sent_then_delivery_error_is_raised_without_calling_resend(
+    monkeypatch,
+):
+    # Arrange
     monkeypatch.setattr(email_service, "RESEND_API_KEY", "")
+
+    # Act
     with patch("email_service.httpx.post") as post:
         with pytest.raises(EmailDeliveryError, match="RESEND_API_KEY"):
             send_email("a@example.com", "Hi", "<p>x</p>")
+
+    # Assert
     post.assert_not_called()
 
 
-def test_a_rejected_email_raises_with_resends_reason():
+def test_given_email_rejected_by_resend_when_sent_then_delivery_error_carries_resends_reason():
     rejected = _response(403, {"message": "The domain is not verified"})
     with patch("email_service.httpx.post", return_value=rejected):
         with pytest.raises(EmailDeliveryError, match="403.*domain is not verified"):
             send_email("a@example.com", "Hi", "<p>x</p>")
 
 
-def test_an_unreachable_resend_raises_a_delivery_error():
+def test_given_unreachable_resend_when_email_sent_then_delivery_error_is_raised():
     with patch("email_service.httpx.post", side_effect=httpx.ConnectError("down")):
         with pytest.raises(EmailDeliveryError, match="Could not reach Resend"):
             send_email("a@example.com", "Hi", "<p>x</p>")

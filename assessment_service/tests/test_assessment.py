@@ -152,36 +152,59 @@ def setup_db():
 client = TestClient(app)
 
 
-def test_get_assessment():
+def test_given_existing_assessment_when_fetched_then_assessment_returned():
+    # Arrange
     token = create_token(user_id=101, role="student")
+
+    # Act
     res = client.get(
         "/api/assessments/1",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert res.status_code == 200
+
+    # Act
     data = res.json()
+
+    # Assert
     assert data["id"] == 1
     assert data["title"] == "Python Basics Quiz"
 
 
-def test_get_assessment_not_found():
+def test_given_unknown_assessment_when_fetched_then_404_assessment_not_found():
+    # Arrange
     token = create_token(user_id=101, role="student")
+
+    # Act
     res = client.get(
         "/api/assessments/999",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert res.status_code == 404
     assert res.json()["detail"]["error"] == "ASSESSMENT_NOT_FOUND"
 
 
-def test_start_session_ac1():
+def test_given_enrolled_student_when_starting_assessment_then_session_is_created():
+    # Arrange
     token = create_token(user_id=101, role="student")
+
+    # Act
     response = client.post(
         "/api/assessments/1/start",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert response.status_code == 200
+
+    # Act
     data = response.json()
+
+    # Assert
     assert "session_id" in data
     assert data["assessment_id"] == 1
     assert data["time_remaining_seconds"] == 15 * 60
@@ -190,34 +213,51 @@ def test_start_session_ac1():
         assert "correct_answer" not in q
 
 
-def test_start_session_duplicate_blocked_ac5():
+def test_given_active_session_when_starting_again_then_409_session_already_active():
+    # Arrange
     token = create_token(user_id=102, role="student")
 
+    # Act
     res1 = client.post(
         "/api/assessments/1/start",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert res1.status_code == 200
     session_id = res1.json()["session_id"]
 
+    # Act
     res2 = client.post(
         "/api/assessments/1/start",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert res2.status_code == 409
+
+    # Act
     err_data = res2.json()["detail"]
+
+    # Assert
     assert err_data["error"] == "SESSION_ALREADY_ACTIVE"
     assert err_data["session_id"] == session_id
 
 
 @patch("router.publish_assessment_graded")
-def test_submit_assessment_ac2(mock_publish):
+def test_given_started_session_when_assessment_submitted_then_it_is_graded(
+    mock_publish,
+):
+    # Arrange
     token = create_token(user_id=103, role="student")
 
+    # Act
     start_res = client.post(
         "/api/assessments/1/start",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert start_res.status_code == 200
     session_id = start_res.json()["session_id"]
 
@@ -229,13 +269,20 @@ def test_submit_assessment_ac2(mock_publish):
         ],
     }
 
+    # Act
     submit_res = client.post(
         "/api/assessments/1/submit",
         json=submit_payload,
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert submit_res.status_code == 200
+
+    # Act
     res_data = submit_res.json()
+
+    # Assert
     assert res_data["score"] == 100.0
     assert res_data["passed"] is True
     assert res_data["correct_count"] == 2
@@ -244,6 +291,8 @@ def test_submit_assessment_ac2(mock_publish):
 
     mock_publish.assert_called_once()
     sent = mock_publish.call_args.kwargs
+
+    # Act and assert
     assert (
         sent["student_id"],
         sent["assessment_id"],
@@ -257,7 +306,10 @@ def test_submit_assessment_ac2(mock_publish):
 
 
 @patch("router.publish_assessment_graded")
-def test_auto_submit_on_expiry_ac3(mock_publish):
+def test_given_expired_session_when_submitted_then_assessment_is_auto_submitted(
+    mock_publish,
+):
+    # Arrange
     token = create_token(user_id=104, role="student")
 
     expired_session_id = "sess_expired_12345"
@@ -269,13 +321,20 @@ def test_auto_submit_on_expiry_ac3(mock_publish):
         ],
     }
 
+    # Act
     submit_res = client.post(
         "/api/assessments/1/submit",
         json=submit_payload,
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert submit_res.status_code == 200
+
+    # Act
     res_data = submit_res.json()
+
+    # Assert
     assert res_data["score"] == 50.0
     assert res_data["passed"] is True
     assert res_data["correct_count"] == 1
@@ -283,6 +342,8 @@ def test_auto_submit_on_expiry_ac3(mock_publish):
 
     mock_publish.assert_called_once()
     sent = mock_publish.call_args.kwargs
+
+    # Act and assert
     assert (
         sent["student_id"],
         sent["assessment_id"],
@@ -295,7 +356,8 @@ def test_auto_submit_on_expiry_ac3(mock_publish):
     assert sent["submitted_at"] is not None
 
 
-def test_tab_switch_violation_ac4():
+def test_given_active_session_when_tab_switch_reported_then_violation_is_recorded():
+    # Arrange
     token = create_token(user_id=105, role="student")
 
     start_res = client.post(
@@ -310,47 +372,69 @@ def test_tab_switch_violation_ac4():
         "detail": "Student switched window tab",
         "timestamp": "2026-08-24T12:00:00Z",
     }
+
+    # Act
     v_res = client.post(
         "/api/assessments/1/violations",
         json=violation_payload,
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert v_res.status_code == 204
 
     db = TestingSessionLocal()
+
+    # Act
     v_log = db.query(ViolationLog).filter(ViolationLog.student_id == 105).first()
+
+    # Assert
     assert v_log is not None
     assert v_log.violation_type == ViolationType.tab_switch
     db.close()
 
 
-def test_other_violation_types():
+def test_given_other_violation_types_when_reported_then_204():
+    # Arrange
     token = create_token(user_id=106, role="student")
+
+    # Act
     v_res = client.post(
         "/api/assessments/1/violations",
         json={"session_id": "sess_dummy", "violation_type": "copy_paste"},
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert v_res.status_code == 204
 
 
-def test_unauthorized_access():
+def test_given_no_token_when_starting_assessment_then_401():
+    # Act
     response = client.post("/api/assessments/1/start")
+
+    # Assert
     assert response.status_code == 401
 
 
-def test_start_requires_enrollment():
+def test_given_student_not_enrolled_when_starting_assessment_then_403_not_enrolled():
+    # Arrange
     token = create_token(user_id=107, role="STUDENT")
+
+    # Act
     with patch("router.is_enrolled", new=AsyncMock(return_value=False)):
         response = client.post(
             "/api/assessments/1/start",
             headers={"Authorization": f"Bearer {token}"},
         )
+
+    # Assert
     assert response.status_code == 403
     assert response.json()["detail"]["error"] == "NOT_ENROLLED"
 
 
-def test_start_blocked_before_scheduled_start():
+def test_given_future_scheduled_start_when_starting_assessment_then_403():
+    # Arrange
     db = TestingSessionLocal()
     db.query(Assessment).filter(Assessment.id == 1).update(
         {Assessment.scheduled_start: datetime.now(timezone.utc) + timedelta(hours=2)}
@@ -359,10 +443,14 @@ def test_start_blocked_before_scheduled_start():
     db.close()
 
     token = create_token(user_id=108, role="student")
+
+    # Act
     response = client.post(
         "/api/assessments/1/start",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+    # Assert
     assert response.status_code == 403
     assert response.json()["detail"]["not_started_yet"] is True
 
@@ -376,11 +464,16 @@ def _import_csv(content: str, filename: str = "questions.csv"):
     )
 
 
-def test_csv_template_download():
+def test_given_teacher_when_csv_template_requested_then_template_returned():
+    # Arrange
     token = create_token(user_id=1, role="admin")
+
+    # Act
     res = client.get(
         "/questions/csv-template", headers={"Authorization": f"Bearer {token}"}
     )
+
+    # Assert
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/csv")
     assert res.text.splitlines()[0] == (
@@ -388,15 +481,21 @@ def test_csv_template_download():
     )
 
 
-def test_csv_template_requires_teacher_or_admin():
+def test_given_student_when_csv_template_requested_then_403():
+    # Arrange
     token = create_token(user_id=110, role="student")
+
+    # Act
     res = client.get(
         "/questions/csv-template", headers={"Authorization": f"Bearer {token}"}
     )
+
+    # Assert
     assert res.status_code == 403
 
 
-def test_csv_import_creates_valid_rows_and_reports_bad_ones():
+def test_given_csv_with_valid_and_bad_rows_when_imported_then_valid_rows_created_and_bad_ones_reported():
+    # Arrange
     csv_text = (
         "question_text,option_a,option_b,option_c,option_d,option_e,correct_answer,explanation\n"
         "Capital of France?,London,Paris,Berlin,,,b,Paris is the capital.\n"
@@ -404,17 +503,28 @@ def test_csv_import_creates_valid_rows_and_reports_bad_ones():
         "Answer is an empty option,Yes,No,,,,D,\n"
         "Duplicate options,Same,Same,,,,A,\n"
     )
+
+    # Act
     res = _import_csv(csv_text)
+
+    # Assert
     assert res.status_code == 201
+
+    # Act
     data = res.json()
+
+    # Assert
     assert data["questions_created"] == 1
     assert len(data["errors"]) == 3
     assert data["errors"][0].startswith("Row 3:")
 
     db = TestingSessionLocal()
+
     imported = (
         db.query(Question).filter(Question.question_text == "Capital of France?").one()
     )
+
+    # Act and assert
     assert imported.correct_answer == "Paris"
     assert imported.explanation == "Paris is the capital."
     assert json.loads(imported.options_json) == ["London", "Paris", "Berlin"]
@@ -422,12 +532,16 @@ def test_csv_import_creates_valid_rows_and_reports_bad_ones():
     db.close()
 
 
-def test_csv_import_rejects_non_csv():
+def test_given_non_csv_file_when_imported_then_415():
+    # Act
     res = _import_csv("not,a,csv", filename="questions.txt")
+
+    # Assert
     assert res.status_code == 415
 
 
-def test_list_by_module_orders_by_position_and_counts_questions():
+def test_given_module_assessments_when_listed_then_ordered_by_position_with_question_counts():
+    # Arrange
     db = TestingSessionLocal()
     db.query(Assessment).filter(Assessment.id == 1).update(
         {Assessment.module_id: 7, Assessment.position: 2}
@@ -447,14 +561,23 @@ def test_list_by_module_orders_by_position_and_counts_questions():
     db.close()
 
     token = create_token(user_id=109, role="student")
+
+    # Act
     response = client.get("/?module_id=7", headers={"Authorization": f"Bearer {token}"})
+
+    # Assert
     assert response.status_code == 200
+
+    # Act
     data = response.json()
+
+    # Assert
     assert [a["id"] for a in data] == [2, 1]
     assert [a["question_count"] for a in data] == [0, 2]
 
 
-def test_perfect_first_attempt_earns_badges_once():
+def test_given_perfect_first_attempt_when_submitted_then_badges_are_earned_once():
+    # Arrange
     from badges import seed_badges
     from models import UserBadge
 
@@ -481,16 +604,22 @@ def test_perfect_first_attempt_earns_badges_once():
             headers=headers,
         ).json()
 
+    # Act
     with patch("router.publish_assessment_graded"):
         first = take_exam()
         second = take_exam()
 
     first_keys = {b["criteria_key"] for b in first["new_badges"]}
+
+    # Assert
     assert {"first_step", "perfect_100", "speed_demon"} <= first_keys
     # Already-earned badges are never awarded twice.
     assert not ({b["criteria_key"] for b in second["new_badges"]} & first_keys)
 
+    # Act
     dashboard = client.get("/badges/dashboard", headers=headers).json()
+
+    # Assert
     assert len(dashboard["available_badges"]) == 10
     assert {
         e["badge"]["criteria_key"] for e in dashboard["earned_badges"]
@@ -578,7 +707,8 @@ def ranked_attempts():
         yield
 
 
-def test_rank_rows_ties_share_a_rank_and_districts_rank_separately():
+def test_given_tied_scores_and_districts_when_ranked_then_ties_share_a_rank_and_districts_rank_separately():
+    # Act
     rows = rank_rows(
         [
             {"id": "a", "score": 90, "time_seconds": 100, "district": "Colombo"},
@@ -587,6 +717,8 @@ def test_rank_rows_ties_share_a_rank_and_districts_rank_separately():
             {"id": "d", "score": 90, "time_seconds": 120, "district": "Colombo"},
         ]
     )
+
+    # Assert
     assert [(r["id"], r["rank"], r["district_rank"]) for r in rows] == [
         ("a", 1, 1),
         ("b", 1, 1),
@@ -595,10 +727,19 @@ def test_rank_rows_ties_share_a_rank_and_districts_rank_separately():
     ]
 
 
-def test_leaderboard_is_public_and_uses_first_attempts(ranked_attempts):
+def test_given_no_token_when_leaderboard_requested_then_ranking_uses_first_attempts(
+    ranked_attempts,
+):
+    # Act
     r = client.get("/rankings/leaderboard", params={"exam_id": 1})
+
+    # Assert
     assert r.status_code == 200
+
+    # Act
     board = r.json()
+
+    # Assert
     assert [
         (row["full_name"], row["score"], row["rank"], row["district_rank"])
         for row in board
@@ -611,17 +752,26 @@ def test_leaderboard_is_public_and_uses_first_attempts(ranked_attempts):
     assert "student_id" not in board[0] and "user_id" not in board[0]
 
 
-def test_leaderboard_marks_caller_and_filters_district(ranked_attempts):
+def test_given_signed_in_student_when_leaderboard_requested_then_caller_is_marked_and_district_filter_applies(
+    ranked_attempts,
+):
+    # Arrange
     headers = {"Authorization": f"Bearer {create_token(203)}"}
+
+    # Act
     board = client.get(
         "/rankings/leaderboard",
         params={"exam_id": 1, "district": "colombo"},
         headers=headers,
     ).json()
+
+    # Assert
     assert [(row["full_name"], row["is_current_user"]) for row in board] == [
         ("Ama Perera", False),
         ("Nimal Fernando", True),
     ]
+
+    # Act and assert
     assert (
         len(
             client.get(
@@ -632,16 +782,24 @@ def test_leaderboard_marks_caller_and_filters_district(ranked_attempts):
     )
 
 
-def test_leaderboard_hides_unpublished_exams(ranked_attempts):
+def test_given_unpublished_exam_when_leaderboard_requested_then_it_is_hidden(
+    ranked_attempts,
+):
+    # Arrange
     db = TestingSessionLocal()
     db.query(Assessment).filter(Assessment.id == 1).update({"is_published": False})
     db.commit()
     db.close()
+
+    # Act and assert
     assert client.get("/rankings/leaderboard", params={"exam_id": 1}).status_code == 404
     assert client.get("/rankings/exams").json() == []
 
 
-def test_ranking_exams_public_and_per_student(ranked_attempts):
+def test_given_attempts_when_ranking_exams_requested_then_public_and_per_student_views_differ(
+    ranked_attempts,
+):
+    # Act and assert
     assert client.get("/rankings/exams").json() == [
         {
             "exam_id": "1",
@@ -651,28 +809,46 @@ def test_ranking_exams_public_and_per_student(ranked_attempts):
         }
     ]
     stranger = {"Authorization": f"Bearer {create_token(555)}"}
+
+    # Act and assert
     assert client.get("/rankings/exams", headers=stranger).json() == []
 
 
-def test_my_exam_rank(ranked_attempts):
+def test_given_no_token_when_exam_rank_requested_then_401_and_signed_in_student_gets_rank(
+    ranked_attempts,
+):
+    # Act
     mine = client.get(
         "/rankings/exam/1", headers={"Authorization": f"Bearer {create_token(201)}"}
     ).json()
+
+    # Assert
     assert (mine["overall_rank"], mine["district_rank"], mine["course_title"]) == (
         2,
         1,
         "Python",
     )
+
+    # Act
     stranger = client.get(
         "/rankings/exam/1", headers={"Authorization": f"Bearer {create_token(555)}"}
     ).json()
+
+    # Assert
     assert stranger["overall_rank"] is None
+
+    # Act and assert
     assert client.get("/rankings/exam/1").status_code == 401
 
 
-def test_result_rank_matches_leaderboard_and_ignores_retakes(ranked_attempts):
+def test_given_retakes_when_result_rank_requested_then_it_matches_the_leaderboard_and_ignores_retakes(
+    ranked_attempts,
+):
     # 203 first scored 60 (3rd); a perfect retake now must not lift that rank.
+    # Arrange
     headers = {"Authorization": f"Bearer {create_token(203)}"}
+
+    # Act
     with patch("router.publish_assessment_graded"):
         start = client.post("/api/assessments/1/start", headers=headers).json()
         result = client.post(
@@ -686,19 +862,32 @@ def test_result_rank_matches_leaderboard_and_ignores_retakes(ranked_attempts):
             },
             headers=headers,
         ).json()
+
+    # Assert
     assert result["score"] == 100
     assert (result["ranking"]["overall_rank"], result["ranking"]["district_rank"]) == (
         3,
         2,
     )
 
+    # Act
     attempts = client.get("/my-submissions", headers=headers).json()
+
+    # Assert
     assert {(a["overall_rank"], a["district_rank"]) for a in attempts} == {(3, 2)}
+
+    # Act
     last = client.get("/1/my-last-attempt", headers=headers).json()
+
+    # Assert
     assert last["ranking"]["overall_rank"] == 3
+
+    # Act
     review = client.get(
         f"/submissions/{attempts[0]['attempt_id']}/review", headers=headers
     ).json()
+
+    # Assert
     assert (review["ranking"]["overall_rank"], review["ranking"]["district_rank"]) == (
         3,
         2,
@@ -750,11 +939,17 @@ def _course_event(instructor_id=5, title="Python"):
     }
 
 
-def test_sitting_an_exam_needs_the_access_list_to_say_so(local_copies):
+def test_given_student_missing_from_access_list_when_starting_exam_then_403_not_enrolled(
+    local_copies,
+):
+    # Arrange
     deliver, _ = local_copies
     headers = {"Authorization": f"Bearer {create_token(user_id=300, role='student')}"}
 
+    # Act
     denied = client.post("/api/assessments/1/start", headers=headers)
+
+    # Assert
     assert (
         denied.status_code == 403 and denied.json()["detail"]["error"] == "NOT_ENROLLED"
     )
@@ -763,10 +958,15 @@ def test_sitting_an_exam_needs_the_access_list_to_say_so(local_copies):
         "access.changed",
         {"student_id": 300, "courses": [{"id": 10, "until": None}], "lessons": []},
     )
+
+    # Act and assert
     assert client.post("/api/assessments/1/start", headers=headers).status_code == 200
 
 
-def test_a_lesson_grant_or_an_expired_grant_is_honoured(local_copies):
+def test_given_lesson_grant_or_expired_grant_when_access_checked_then_grant_rules_are_applied(
+    local_copies,
+):
+    # Arrange
     deliver, _ = local_copies
     deliver("access.changed", {"student_id": 301, "courses": [], "lessons": [55]})
     deliver(
@@ -777,12 +977,17 @@ def test_a_lesson_grant_or_an_expired_grant_is_honoured(local_copies):
             "lessons": [],
         },
     )
+
+    # Act and assert
     assert asyncio.run(access_module.is_enrolled(301, 10, 55)) is True
     assert asyncio.run(access_module.is_enrolled(301, 10, 56)) is False
     assert asyncio.run(access_module.is_enrolled(302, 10)) is False
 
 
-def test_a_teacher_can_only_manage_exams_of_courses_they_own(local_copies):
+def test_given_teacher_when_managing_exams_then_only_exams_of_owned_courses_are_allowed(
+    local_copies,
+):
+    # Arrange
     deliver, sent = local_copies
     deliver("course.upserted", _course_event(instructor_id=5))
     body = {"course_id": 10, "title": "Unit test", "is_published": True}
@@ -790,18 +995,27 @@ def test_a_teacher_can_only_manage_exams_of_courses_they_own(local_copies):
     owner = {"Authorization": f"Bearer {create_token(user_id=5, role='teacher')}"}
     other = {"Authorization": f"Bearer {create_token(user_id=6, role='teacher')}"}
     admin = {"Authorization": f"Bearer {create_token(user_id=1, role='admin')}"}
+
+    # Act and assert
     assert client.post("/", json=body, headers=other).status_code == 403
     assert (
         client.post("/", json={**body, "course_id": 999}, headers=other).status_code
         == 404
     )
 
+    # Act
     created = client.post("/", json=body, headers=owner)
+
+    # Assert
     assert created.status_code == 201
+
+    # Act and assert
     assert client.post("/", json=body, headers=admin).status_code == 201
 
     # every change to an exam is announced for the services that keep a copy
     key, payload = sent[0]
+
+    # Act and assert
     assert (
         key == "assessment.upserted"
         and payload["course_id"] == 10
@@ -809,18 +1023,29 @@ def test_a_teacher_can_only_manage_exams_of_courses_they_own(local_copies):
     )
 
     exam_id = created.json()["id"]
+
+    # Act and assert
     assert (
         client.put(
             f"/{exam_id}", json={"is_published": False}, headers=owner
         ).status_code
         == 200
     )
+
+    # Act and assert
     assert sent[-1][1]["is_published"] is False
+
+    # Act and assert
     assert client.delete(f"/{exam_id}", headers=owner).status_code == 204
+
+    # Act and assert
     assert sent[-1] == ("assessment.deleted", {"id": exam_id})
 
 
-def test_titles_and_leaderboard_names_come_from_the_local_copies(local_copies):
+def test_given_local_copies_when_titles_and_names_requested_then_values_come_from_the_copies(
+    local_copies,
+):
+    # Arrange
     deliver, _ = local_copies
     deliver("course.upserted", _course_event(title="Python Basics"))
     deliver(
@@ -833,13 +1058,22 @@ def test_titles_and_leaderboard_names_come_from_the_local_copies(local_copies):
             "grade": 11,
         },
     )
+
+    # Act and assert
     assert asyncio.run(catalog.get_course_titles([10, 11])) == {10: "Python Basics"}
     assert asyncio.run(catalog.get_course_instructor_id(10)) == 5
+
+    # Act
     profiles = asyncio.run(people.get_profiles([400, 401]))
+
+    # Assert
     assert profiles[400]["full_name"] == "Ama Perera" and 401 not in profiles
 
 
-def test_the_graded_event_is_published_with_the_full_result(local_copies):
+def test_given_graded_attempt_when_submitted_then_graded_event_is_published_with_the_full_result(
+    local_copies,
+):
+    # Arrange
     deliver, sent = local_copies
     deliver(
         "access.changed",
@@ -847,6 +1081,8 @@ def test_the_graded_event_is_published_with_the_full_result(local_copies):
     )
     headers = {"Authorization": f"Bearer {create_token(user_id=310, role='student')}"}
     start = client.post("/api/assessments/1/start", headers=headers).json()
+
+    # Act
     client.post(
         "/api/assessments/1/submit",
         json={
@@ -856,6 +1092,8 @@ def test_the_graded_event_is_published_with_the_full_result(local_copies):
         headers=headers,
     )
     graded = [p for k, p in sent if k == "assessment.graded"]
+
+    # Assert
     assert len(graded) == 1
     assert graded[0]["student_id"] == 310 and graded[0]["course_id"] == 10
     assert graded[0]["total_questions"] == 2 and graded[0]["submission_id"]
