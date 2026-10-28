@@ -76,21 +76,32 @@ def _post(url, content, mime, name="file.bin", headers=TEACHER):
 # ---------------------------------------------------------------------------
 
 
-def test_startup_creates_tables_and_starts_consumer(monkeypatch):
+def test_given_service_starting_when_startup_runs_then_tables_created_and_consumer_started(
+    monkeypatch,
+):
+    # Arrange
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     calls = []
     monkeypatch.setattr(main, "engine", engine)
     monkeypatch.setattr(event_consumer, "start", lambda: calls.append("consumer"))
+
     main.on_startup()
+
+    # Act and assert
     with engine.connect() as conn:
         assert "replica_access" in engine.dialect.get_table_names(conn)
+
+    # Act and assert
     assert calls == ["consumer"]
     engine.dispose()
 
 
-def test_startup_survives_create_all_failure(monkeypatch):
+def test_given_table_creation_fails_when_startup_runs_then_service_still_starts(
+    monkeypatch,
+):
+    # Arrange
     calls = []
 
     def broken(**kwargs):
@@ -98,7 +109,11 @@ def test_startup_survives_create_all_failure(monkeypatch):
 
     monkeypatch.setattr(main.Base.metadata, "create_all", broken)
     monkeypatch.setattr(event_consumer, "start", lambda: calls.append("consumer"))
+
+    # Act
     main.on_startup()
+
+    # Assert
     assert calls == ["consumer"]
 
 
@@ -115,8 +130,10 @@ def replica(monkeypatch):
     engine.dispose()
 
 
-def test_access_comes_from_access_events(replica):
+def test_given_access_events_when_consumed_then_access_checks_use_them(replica):
+    # Act and assert
     assert asyncio.run(access.is_enrolled(101, 10)) is False
+
     event_consumer.handle(
         "access.changed",
         {
@@ -128,35 +145,55 @@ def test_access_comes_from_access_events(replica):
             "lessons": [99],
         },
     )
+
+    # Act and assert
     assert asyncio.run(access.is_enrolled(101, 10)) is True
     assert asyncio.run(access.is_enrolled(101, 11)) is False  # expired grant
 
 
-def test_enrolled_student_streams_through_the_real_access_check(replica):
+def test_given_enrolled_and_unenrolled_students_when_streaming_through_the_real_access_check_then_only_enrolled_is_allowed(
+    replica,
+):
+    # Arrange
     event_consumer.handle(
         "access.changed",
         {"student_id": 101, "courses": [{"id": 10, "until": None}], "lessons": []},
     )
+
+    # Act
     ok = client.get(
         "/lessons/1/stream?youtube_video_id=abc&course_id=10", headers=STUDENT
     )
+
+    # Assert
     assert ok.status_code == 200
     assert ok.json() == {
         "embed_url": "https://www.youtube-nocookie.com/embed/abc?rel=0&modestbranding=1",
         "allow_origin": "https://edura.lk",
     }
+
+    # Act
     denied = client.get(
         "/lessons/1/stream?youtube_video_id=abc&course_id=11", headers=STUDENT
     )
+
+    # Assert
     assert denied.status_code == 403
 
 
-def test_consumer_start_and_rollback(monkeypatch):
+def test_given_consumer_when_started_and_handler_fails_then_queue_is_bound_and_session_rolled_back(
+    monkeypatch,
+):
+    # Arrange
     calls = []
     monkeypatch.setattr(
         event_consumer.messaging, "start_consumer", lambda *args: calls.append(args)
     )
+
+    # Act
     event_consumer.start()
+
+    # Assert
     assert calls == [
         ("content", "content.queue", ev.QUEUES["content.queue"], event_consumer.handle)
     ]
@@ -177,8 +214,12 @@ def test_consumer_start_and_rollback(monkeypatch):
 
     monkeypatch.setattr(event_consumer, "SessionLocal", lambda: fake)
     monkeypatch.setattr(event_consumer.replicas, "apply", explode)
+
+    # Act and assert
     with pytest.raises(ValueError):
         event_consumer.handle("access.changed", {})
+
+    # Act and assert
     assert fake.rolled_back and fake.closed
 
 
@@ -197,12 +238,22 @@ def test_consumer_start_and_rollback(monkeypatch):
         ("image/png", "image/png", "image"),
     ],
 )
-def test_material_upload(detected, uploads, declared, reported, resource_type):
+def test_given_valid_material_when_uploaded_then_200(
+    detected, uploads, declared, reported, resource_type
+):
+    # Arrange
     detected["mime"] = reported
+
+    # Act
     resp = _post("/upload-material", PDF, declared, name="notes.docx")
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
     # The declared type is reported back (libmagic can't tell docx from zip).
+    # Assert
     assert data["mime_type"] == declared
     assert data["message"] == "Material uploaded successfully"
     assert uploads == [
@@ -214,22 +265,38 @@ def test_material_upload(detected, uploads, declared, reported, resource_type):
     ]
 
 
-def test_material_upload_rejections(detected, uploads, monkeypatch):
+def test_given_unsupported_oversized_empty_or_mismatched_material_when_uploaded_then_each_is_rejected(
+    detected, uploads, monkeypatch
+):
+    # Act
     empty = _post("/upload-material", b"", "application/pdf")
+
+    # Assert
     assert (empty.status_code, empty.json()["detail"]["error"]) == (422, "EMPTY_FILE")
 
+    # Act
     wrong_type = _post("/upload-material", PDF, "text/html")
+
+    # Assert
     assert wrong_type.json()["detail"]["error"] == "UNSUPPORTED_MEDIA_TYPE"
 
     detected["mime"] = "application/x-dosexec"
+
+    # Act
     disguised = _post("/upload-material", PDF, "application/pdf")
+
+    # Assert
     assert (disguised.status_code, disguised.json()["detail"]["error"]) == (
         415,
         "MIME_MISMATCH",
     )
 
     monkeypatch.setattr(router, "MAX_MATERIAL_SIZE", 4)
+
+    # Act
     too_big = _post("/upload-material", PDF, "application/pdf")
+
+    # Assert
     assert (too_big.status_code, too_big.json()["detail"]["error"]) == (
         413,
         "FILE_TOO_LARGE",
@@ -237,7 +304,8 @@ def test_material_upload_rejections(detected, uploads, monkeypatch):
     assert uploads == []
 
 
-def test_material_upload_is_for_staff(uploads):
+def test_given_student_or_no_token_when_uploading_material_then_403_or_401(uploads):
+    # Act and assert
     assert (
         _post("/upload-material", PDF, "application/pdf", headers=STUDENT).status_code
         == 403
@@ -252,13 +320,17 @@ def test_material_upload_is_for_staff(uploads):
 # ---------------------------------------------------------------------------
 
 
-def test_delete_uploaded_asset(monkeypatch):
+def test_given_uploaded_asset_when_deleted_then_204(monkeypatch):
+    # Arrange
     deleted = []
     monkeypatch.setattr(
         router, "delete_asset", lambda pid: deleted.append(pid) or False
     )
+
+    # Act
     resp = client.delete("/assets?public_id=edura/uploads/notes", headers=ADMIN)
     # An asset that is already gone is not an error.
+    # Assert
     assert resp.status_code == 204
     assert deleted == ["edura/uploads/notes"]
 
@@ -272,14 +344,22 @@ def test_delete_uploaded_asset(monkeypatch):
         "other",
     ],
 )
-def test_only_content_assets_can_be_deleted(monkeypatch, public_id):
+def test_given_asset_outside_content_folders_when_deleted_then_403_asset_not_deletable(
+    monkeypatch, public_id
+):
+    # Arrange
     monkeypatch.setattr(router, "delete_asset", lambda pid: pytest.fail("deleted"))
+
+    # Act
     resp = client.delete(f"/assets?public_id={public_id}", headers=TEACHER)
+
+    # Assert
     assert resp.status_code == 403
     assert resp.json()["detail"]["error"] == "ASSET_NOT_DELETABLE"
 
 
-def test_delete_asset_validation_and_roles():
+def test_given_empty_id_or_non_staff_when_deleting_asset_then_422_or_403():
+    # Act and assert
     assert client.delete("/assets?public_id=", headers=TEACHER).status_code == 422
     assert (
         client.delete("/assets?public_id=edura/uploads/x", headers=STUDENT).status_code
@@ -292,15 +372,23 @@ def test_delete_asset_validation_and_roles():
 # ---------------------------------------------------------------------------
 
 
-def test_any_user_can_upload_an_avatar(detected, uploads):
+def test_given_any_signed_in_user_when_uploading_avatar_then_200(detected, uploads):
+    # Arrange
     detected["mime"] = "image/png"
+
+    # Act
     resp = _post("/avatar", PNG, "image/png", name="me.png", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
     assert resp.json()["message"] == "Avatar uploaded successfully"
     assert uploads[0]["folder"] == "edura/avatars"
 
 
-def test_avatar_rejections(detected, uploads, monkeypatch):
+def test_given_bad_type_mismatch_oversized_or_no_token_when_uploading_avatar_then_each_is_rejected(
+    detected, uploads, monkeypatch
+):
+    # Act and assert
     assert (
         _post("/avatar", PDF, "application/pdf", headers=STUDENT).json()["detail"][
             "error"
@@ -308,11 +396,19 @@ def test_avatar_rejections(detected, uploads, monkeypatch):
         == "UNSUPPORTED_MEDIA_TYPE"
     )
     detected["mime"] = "image/gif"
+
+    # Act
     mismatch = _post("/avatar", PNG, "image/png", headers=STUDENT)
+
+    # Assert
     assert mismatch.json()["detail"]["error"] == "MIME_MISMATCH"
     monkeypatch.setattr(router, "MAX_AVATAR_SIZE", 2)
+
+    # Act and assert
     assert _post("/avatar", PNG, "image/png", headers=STUDENT).status_code == 413
     assert _post("/avatar", PNG, "image/png", headers={}).status_code == 401
+
+    # Act and assert
     assert uploads == []
 
 
@@ -321,10 +417,17 @@ def test_avatar_rejections(detected, uploads, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_credentials_are_a_503(monkeypatch):
+def test_given_missing_cloudinary_credentials_when_uploading_then_503_not_configured(
+    monkeypatch,
+):
+    # Arrange
     monkeypatch.setenv("CLOUDINARY_API_SECRET", "")
+
+    # Act and assert
     with pytest.raises(HTTPException) as err:
         cloudinary_utils.upload_asset(b"x", "x.pdf")
+
+    # Act and assert
     assert err.value.status_code == 503
     assert err.value.detail["error"] == "CLOUDINARY_NOT_CONFIGURED"
 
@@ -341,17 +444,24 @@ def cloud(monkeypatch):
     return calls
 
 
-def test_upload_asset_passes_safe_options(cloud, monkeypatch):
+def test_given_upload_when_asset_stored_then_safe_options_are_passed_to_the_storage(
+    cloud, monkeypatch
+):
+    # Arrange
     def upload(content, **options):
         cloud.append(("upload", options))
         return {"public_id": "edura/uploads/a", "secure_url": "https://cdn/a"}
 
     monkeypatch.setattr(cloudinary_utils.cloudinary.uploader, "upload", upload)
+
+    # Act and assert
     assert cloudinary_utils.upload_asset(b"x", "a.pdf", resource_type="raw") == (
         "edura/uploads/a",
         "https://cdn/a",
     )
     (_, config), (_, options) = cloud
+
+    # Act and assert
     assert config == {
         "cloud_name": "demo",
         "api_key": "key",
@@ -362,7 +472,10 @@ def test_upload_asset_passes_safe_options(cloud, monkeypatch):
     assert (options["folder"], options["resource_type"]) == ("edura/uploads", "raw")
 
 
-def test_delete_asset_tries_each_resource_type(cloud, monkeypatch):
+def test_given_asset_id_when_deleting_then_each_resource_type_is_tried(
+    cloud, monkeypatch
+):
+    # Arrange
     tried = []
 
     def destroy(public_id, resource_type, invalidate):
@@ -370,6 +483,8 @@ def test_delete_asset_tries_each_resource_type(cloud, monkeypatch):
         return {"result": "ok" if resource_type == "raw" else "not found"}
 
     monkeypatch.setattr(cloudinary_utils.cloudinary.uploader, "destroy", destroy)
+
+    # Act and assert
     assert cloudinary_utils.delete_asset("edura/uploads/a") is True
     assert tried == ["image", "raw"]
 
@@ -379,11 +494,14 @@ def test_delete_asset_tries_each_resource_type(cloud, monkeypatch):
         "destroy",
         lambda *a, **k: tried.append(k["resource_type"]) or {"result": "not found"},
     )
+
+    # Act and assert
     assert cloudinary_utils.delete_asset("edura/uploads/gone") is False
     assert tried == ["image", "raw", "video"]
 
 
-def test_signed_url_expires_in_an_hour(cloud, monkeypatch):
+def test_given_signed_url_when_created_then_it_expires_in_an_hour(cloud, monkeypatch):
+    # Arrange
     seen = {}
 
     def cloudinary_url(public_id, **options):
@@ -394,6 +512,10 @@ def test_signed_url_expires_in_an_hour(cloud, monkeypatch):
     monkeypatch.setattr(
         cloudinary_utils.cloudinary.utils, "cloudinary_url", cloudinary_url
     )
+
+    # Act
     url, expires = cloudinary_utils.get_signed_url("edura/uploads/a")
+
+    # Assert
     assert (url, expires) == ("https://cdn/signed/edura/uploads/a", 1_003_600)
     assert seen["sign_url"] is True and seen["expires_at"] == 1_003_600
