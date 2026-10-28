@@ -110,7 +110,7 @@ jobs:
             exit 1
           fi
           pytest ${{ matrix.service }} \
-            --cov=${{ matrix.service }} --cov-report=xml:coverage.xml --cov-report=term
+            --cov=${{ matrix.service }} --cov-branch --cov-report=xml:coverage.xml --cov-report=term
 
       # Guideline 6.4 / 8.2: coverage on NEW code must be >= 80%
       - name: Coverage gate (changed lines >= 80%)
