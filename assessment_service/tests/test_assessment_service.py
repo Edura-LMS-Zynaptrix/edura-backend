@@ -224,8 +224,11 @@ def _zip(files: dict) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def test_health_needs_no_auth():
+def test_given_no_token_when_health_requested_then_200():
+    # Act
     resp = client.get("/health")
+
+    # Assert
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok", "service": "assessment_service"}
 
@@ -247,19 +250,29 @@ def startup(monkeypatch):
     startup_engine.dispose()
 
 
-def test_startup_creates_tables_seeds_badges_and_starts_listeners(startup):
+def test_given_service_starting_when_startup_runs_then_tables_created_badges_seeded_and_listeners_started(
+    startup,
+):
+    # Arrange
     startup_engine, calls = startup
 
     # SQLite rejects "ADD COLUMN IF NOT EXISTS"; startup logs it and carries on.
     main.on_startup()
 
     session = sessionmaker(bind=startup_engine)()
+
+    # Act and assert
     assert session.query(Badge).count() == len(badges.BADGE_DEFINITIONS)
     session.close()
+
+    # Act and assert
     assert calls == ["consumer", ("resync", resync.announce_everything)]
 
 
-def test_startup_survives_db_and_seed_failures(startup, monkeypatch):
+def test_given_database_and_seed_failures_when_startup_runs_then_service_still_starts(
+    startup, monkeypatch
+):
+    # Arrange
     _, calls = startup
 
     def broken(*args, **kwargs):
@@ -268,17 +281,24 @@ def test_startup_survives_db_and_seed_failures(startup, monkeypatch):
     monkeypatch.setattr(main.Base.metadata, "create_all", broken)
     monkeypatch.setattr(main, "seed_badges", broken)
 
+    # Act
     main.on_startup()
 
+    # Assert
     assert calls[0] == "consumer"
 
 
-def test_consumer_start_binds_assessment_queue(monkeypatch):
+def test_given_consumer_when_started_then_binds_assessment_queue(monkeypatch):
+    # Arrange
     calls = []
     monkeypatch.setattr(
         event_consumer.messaging, "start_consumer", lambda *args: calls.append(args)
     )
+
+    # Act
     event_consumer.start()
+
+    # Assert
     assert calls == [
         (
             "assessment",
@@ -289,7 +309,10 @@ def test_consumer_start_binds_assessment_queue(monkeypatch):
     ]
 
 
-def test_consumer_rolls_back_and_reraises(monkeypatch):
+def test_given_handler_error_when_event_processed_then_session_rolled_back_and_error_reraised(
+    monkeypatch,
+):
+    # Arrange
     class FakeSession:
         rolled_back = closed = False
 
@@ -306,8 +329,12 @@ def test_consumer_rolls_back_and_reraises(monkeypatch):
 
     monkeypatch.setattr(event_consumer, "SessionLocal", lambda: fake)
     monkeypatch.setattr(event_consumer.replicas, "apply", explode)
+
+    # Act and assert
     with pytest.raises(ValueError):
         event_consumer.handle("course.upserted", {})
+
+    # Act and assert
     assert fake.rolled_back and fake.closed
 
 
@@ -316,38 +343,58 @@ def test_consumer_rolls_back_and_reraises(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_list_needs_a_filter():
+def test_given_no_filter_when_listing_assessments_then_422_filter_required():
+    # Act
     resp = client.get("/", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "FILTER_REQUIRED"
 
 
-def test_list_hides_drafts_from_students_and_visitors(db):
+def test_given_draft_assessments_when_students_and_visitors_list_then_drafts_are_hidden(
+    db,
+):
+    # Arrange
     _exam(db, title="Live", position=1)
     _exam(db, title="Draft", is_published=False, position=2)
     _exam(db, title="Other course", course_id=11)
 
+    # Act
     titles = lambda headers: [  # noqa: E731
         a["title"] for a in client.get("/?course_id=10", headers=headers).json()
     ]
+
+    # Assert
     assert titles(STUDENT) == ["Live"]
     assert titles({}) == ["Live"]
     assert titles(OWNER) == ["Live", "Draft"]
     assert titles(ADMIN) == ["Live", "Draft"]
 
 
-def test_student_cannot_read_a_draft_but_teacher_can(db):
+def test_given_draft_assessment_when_read_then_student_gets_404_and_teacher_gets_200(
+    db,
+):
+    # Arrange
     draft = _exam(db, is_published=False)
     _question(db, draft.id)
 
+    # Act and assert
     assert client.get(f"/{draft.id}", headers=STUDENT).status_code == 404
+
+    # Act
     resp = client.get(f"/{draft.id}", headers=OWNER)
+
+    # Assert
     assert resp.status_code == 200
     assert resp.json()["question_count"] == 1
 
 
-def test_get_requires_sign_in(db):
+def test_given_no_token_when_assessment_fetched_then_401(db):
+    # Arrange
     exam = _exam(db)
+
+    # Act and assert
     assert client.get(f"/{exam.id}").status_code == 401
 
 
@@ -356,8 +403,13 @@ def test_get_requires_sign_in(db):
 # ---------------------------------------------------------------------------
 
 
-def test_create_exam_with_defaults_and_naive_start_as_utc(db, sent):
+def test_given_minimal_exam_when_created_then_defaults_apply_and_naive_start_is_treated_as_utc(
+    db, sent
+):
+    # Arrange
     _course(db)
+
+    # Act
     resp = client.post(
         "/",
         json={
@@ -369,8 +421,14 @@ def test_create_exam_with_defaults_and_naive_start_as_utc(db, sent):
         },
         headers=OWNER,
     )
+
+    # Assert
     assert resp.status_code == 201
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert data["assessment_type"] == "exam"
     assert data["is_published"] is False
     assert data["pass_score"] == 50 and data["question_count"] == 0
@@ -379,9 +437,14 @@ def test_create_exam_with_defaults_and_naive_start_as_utc(db, sent):
     assert sent[-1][1]["module_id"] == 7
 
 
-def test_create_exam_permissions(db):
+def test_given_student_or_no_token_when_creating_exam_then_403_or_401_and_teacher_succeeds(
+    db,
+):
+    # Arrange
     _course(db)
     body = {"course_id": 10, "title": "Unit 1"}
+
+    # Act and assert
     assert client.post("/", json=body, headers=STUDENT).status_code == 403
     assert client.post("/", json=body).status_code == 401
     # An admin needs no local copy of the course at all.
@@ -391,17 +454,22 @@ def test_create_exam_permissions(db):
     )
 
 
-def test_teacher_gets_404_for_an_unknown_course():
+def test_given_unknown_course_when_teacher_creates_exam_then_404_course_not_found():
+    # Act
     resp = client.post("/", json={"course_id": 999, "title": "x"}, headers=OWNER)
+
+    # Assert
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "COURSE_NOT_FOUND"
 
 
-def test_update_exam(db, sent):
+def test_given_owner_when_updating_exam_then_changes_are_saved(db, sent):
+    # Arrange
     _course(db)
     exam = _exam(db)
     _question(db, exam.id)
 
+    # Act
     resp = client.put(
         f"/{exam.id}",
         json={
@@ -411,8 +479,14 @@ def test_update_exam(db, sent):
         },
         headers=OWNER,
     )
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert (data["assessment_type"], data["title"], data["question_count"]) == (
         "exam",
         "Renamed",
@@ -421,28 +495,46 @@ def test_update_exam(db, sent):
     assert sent[-1][1]["title"] == "Renamed"
 
 
-def test_update_exam_errors(db):
+def test_given_unknown_exam_or_non_owner_when_updating_then_404_or_403_not_course_owner(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
+
+    # Act and assert
     assert client.put("/999", json={"title": "x"}, headers=OWNER).status_code == 404
+
+    # Act
     resp = client.put(f"/{exam.id}", json={"title": "x"}, headers=OTHER_TEACHER)
+
+    # Assert
     assert resp.status_code == 403
     assert resp.json()["detail"]["error"] == "NOT_COURSE_OWNER"
 
 
-def test_delete_exam_removes_its_questions(db, sent):
+def test_given_exam_with_questions_when_deleted_then_questions_are_removed(db, sent):
+    # Arrange
     _course(db)
     exam = _exam(db)
     _question(db, exam.id)
     exam_id = exam.id
 
+    # Act and assert
     assert client.delete(f"/{exam_id}", headers=OWNER).status_code == 204
+
+    # Act and assert
     assert db.query(Question).count() == 0
     assert sent[-1] == (ev.ASSESSMENT_DELETED, {"id": exam_id})
+
+    # Act and assert
     assert client.delete(f"/{exam_id}", headers=OWNER).status_code == 404
 
 
-def test_delete_all_exams_of_a_lesson(db, sent):
+def test_given_lesson_with_exams_when_all_exams_deleted_then_204_and_exams_are_removed(
+    db, sent
+):
+    # Arrange
     _course(db)
     a = _exam(db, module_id=7)
     b = _exam(db, module_id=7)
@@ -452,23 +544,36 @@ def test_delete_all_exams_of_a_lesson(db, sent):
     _question(db, keep_other_lesson.id)
     ids = {a.id, b.id}
 
+    # Act
     resp = client.delete("/by-module/7?course_id=10", headers=OWNER)
+
+    # Assert
     assert resp.status_code == 204
 
     remaining = {e.id for e in db.query(Assessment).all()}
+
+    # Act and assert
     assert remaining == {keep_other_lesson.id, keep_other_course.id}
     assert db.query(Question).count() == 1
     assert {p["id"] for k, p in sent if k == ev.ASSESSMENT_DELETED} == ids
 
 
-def test_delete_empty_lesson_announces_nothing(db, sent):
+def test_given_lesson_without_exams_when_deleted_then_nothing_is_announced(db, sent):
+    # Arrange
     _course(db)
+
+    # Act and assert
     assert client.delete("/by-module/7?course_id=10", headers=OWNER).status_code == 204
+
+    # Act and assert
     assert sent == []
 
 
-def test_delete_lesson_exams_needs_ownership(db):
+def test_given_non_owner_when_deleting_lesson_exams_then_403(db):
+    # Arrange
     _course(db)
+
+    # Act and assert
     assert (
         client.delete("/by-module/7?course_id=10", headers=OTHER_TEACHER).status_code
         == 403
@@ -480,25 +585,37 @@ def test_delete_lesson_exams_needs_ownership(db):
 # ---------------------------------------------------------------------------
 
 
-def test_owner_lists_questions_with_answers(db):
+def test_given_owner_when_questions_listed_then_answers_are_included_and_non_owner_is_403(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
     _question(db, exam.id, text="Second", position=2)
     _question(db, exam.id, text="First", position=1, answer="B")
 
+    # Act
     resp = client.get(f"/{exam.id}/questions", headers=OWNER)
+
+    # Assert
     assert resp.status_code == 200
     assert [q["question_text"] for q in resp.json()] == ["First", "Second"]
     assert resp.json()[0]["correct_answer"] == "B"
     assert resp.json()[0]["option_images"] == [None, None]
 
+    # Act and assert
     assert client.get(f"/{exam.id}/questions", headers=STUDENT).status_code == 403
     assert client.get(f"/{exam.id}/questions", headers=OTHER_TEACHER).status_code == 403
 
 
-def test_create_question_from_options(db):
+def test_given_options_with_a_correct_flag_when_question_created_then_answer_is_taken_from_the_options(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
+
+    # Act
     resp = client.post(
         f"/{exam.id}/questions",
         json={
@@ -516,8 +633,14 @@ def test_create_question_from_options(db):
         },
         headers=OWNER,
     )
+
+    # Assert
     assert resp.status_code == 201
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert data["options"] == ["3", "4"]
     assert data["correct_answer"] == "4"
     assert data["option_images"] == [
@@ -526,9 +649,14 @@ def test_create_question_from_options(db):
     ]
 
 
-def test_create_question_explicit_answer_and_no_images(db):
+def test_given_explicit_answer_and_no_images_when_question_created_then_question_is_saved_without_images(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
+
+    # Act
     resp = client.post(
         f"/{exam.id}/questions",
         json={
@@ -539,39 +667,57 @@ def test_create_question_explicit_answer_and_no_images(db):
         },
         headers=OWNER,
     )
+
+    # Assert
     assert resp.status_code == 201
     assert resp.json()["question_type"] == "true_false"
     assert resp.json()["correct_answer"] == "False"
+
+    # Act
     q = db.get(Question, resp.json()["id"])
+
+    # Assert
     assert q.option_images_json is None
 
 
-def test_create_question_needs_a_correct_answer(db):
+def test_given_question_without_correct_answer_when_created_then_422_correct_answer_required(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
+
+    # Act
     resp = client.post(
         f"/{exam.id}/questions",
         json={"question_text": "?", "options": [{"option_text": "x"}]},
         headers=OWNER,
     )
+
+    # Assert
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "CORRECT_ANSWER_REQUIRED"
 
 
-def test_create_question_for_missing_exam():
+def test_given_unknown_exam_when_question_created_then_404():
+    # Act
     resp = client.post(
         "/999/questions",
         json={"question_text": "?", "correct_answer": "x"},
         headers=ADMIN,
     )
+
+    # Assert
     assert resp.status_code == 404
 
 
-def test_update_question_options_set_the_answer(db):
+def test_given_new_options_when_question_updated_then_options_set_the_answer(db):
+    # Arrange
     _course(db)
     exam = _exam(db)
     q = _question(db, exam.id, options=("A", "B"), answer="A")
 
+    # Act
     resp = client.put(
         f"/questions/{q.id}",
         json={
@@ -583,8 +729,14 @@ def test_update_question_options_set_the_answer(db):
         },
         headers=OWNER,
     )
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert (data["options"], data["correct_answer"], data["question_type"]) == (
         ["X", "Y"],
         "Y",
@@ -598,11 +750,15 @@ def test_update_question_options_set_the_answer(db):
     reason="BUG: update_question reads o['is_correct'], but model_dump(exclude_unset=True) "
     "drops it from options that omit it (schema default False) -> 500",
 )
-def test_update_question_options_may_omit_is_correct(db):
+def test_given_options_without_correct_flag_when_question_updated_then_update_succeeds(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
     q = _question(db, exam.id)
 
+    # Act
     resp = client.put(
         f"/questions/{q.id}",
         json={
@@ -613,15 +769,21 @@ def test_update_question_options_may_omit_is_correct(db):
         },
         headers=OWNER,
     )
+
+    # Assert
     assert resp.status_code == 200
     assert resp.json()["correct_answer"] == "Y"
 
 
-def test_update_question_explicit_answer_wins(db):
+def test_given_explicit_answer_and_options_when_question_updated_then_explicit_answer_wins(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
     q = _question(db, exam.id)
 
+    # Act
     resp = client.put(
         f"/questions/{q.id}",
         json={
@@ -633,33 +795,51 @@ def test_update_question_explicit_answer_wins(db):
         },
         headers=OWNER,
     )
+
+    # Assert
     assert resp.json()["correct_answer"] == "Y"
 
 
-def test_update_question_clearing_options(db):
+def test_given_empty_options_when_question_updated_then_options_are_cleared(db):
+    # Arrange
     _course(db)
     exam = _exam(db)
     q = _question(db, exam.id)
 
+    # Act
     resp = client.put(
         f"/questions/{q.id}",
         json={"options": [], "question_type": "short_answer", "correct_answer": "x"},
         headers=OWNER,
     )
+
+    # Assert
     assert resp.json()["options"] == []
     db.refresh(q)
+
+    # Act and assert
     assert q.options_json is None and q.option_images_json is None
 
 
-def test_update_and_delete_question_errors(db):
+def test_given_unknown_question_or_non_owner_when_updating_or_deleting_then_404_or_403(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
     q = _question(db, exam.id)
 
+    # Act and assert
     assert client.put("/questions/999", json={}, headers=OWNER).status_code == 404
+
+    # Act
     resp = client.delete("/questions/999", headers=OWNER)
+
+    # Assert
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "QUESTION_NOT_FOUND"
+
+    # Act and assert
     assert (
         client.put(f"/questions/{q.id}", json={}, headers=OTHER_TEACHER).status_code
         == 403
@@ -667,11 +847,16 @@ def test_update_and_delete_question_errors(db):
     assert client.delete(f"/questions/{q.id}", headers=OTHER_TEACHER).status_code == 403
 
 
-def test_delete_question(db):
+def test_given_question_when_deleted_then_204(db):
+    # Arrange
     _course(db)
     exam = _exam(db)
     q = _question(db, exam.id)
+
+    # Act and assert
     assert client.delete(f"/questions/{q.id}", headers=OWNER).status_code == 204
+
+    # Act and assert
     assert db.query(Question).count() == 0
 
 
@@ -683,28 +868,47 @@ def _upload_csv(exam_id, content: bytes, headers=ADMIN, name="q.csv"):
     )
 
 
-def test_csv_import_too_large(db, monkeypatch):
+def test_given_oversized_csv_when_imported_then_413(db, monkeypatch):
+    # Arrange
     exam = _exam(db)
     monkeypatch.setattr(router, "_MAX_CSV_SIZE", 10)
+
+    # Act
     resp = _upload_csv(exam.id, b"question_text,option_a\n" * 5)
+
+    # Assert
     assert resp.status_code == 413
 
 
-def test_csv_import_must_be_utf8(db):
+def test_given_csv_in_wrong_encoding_when_imported_then_422_invalid_encoding(db):
+    # Arrange
     exam = _exam(db)
+
+    # Act
     resp = _upload_csv(exam.id, "question_text\nCafé".encode("latin-1"))
+
+    # Assert
     assert resp.status_code == 422
     assert resp.json()["detail"]["error"] == "INVALID_ENCODING"
 
 
-def test_csv_import_with_only_bad_rows_creates_nothing(db):
+def test_given_csv_with_only_bad_rows_when_imported_then_nothing_is_created(db):
+    # Arrange
     exam = _exam(db)
+
+    # Act
     resp = _upload_csv(
         exam.id,
         b"question_text,option_a,option_b,correct_answer\n,A,B,A\nQ,A,B,Z\n",
     )
+
+    # Assert
     assert resp.status_code == 201
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert data["questions_created"] == 0
     assert data["errors"] == [
         "Row 2: question_text is empty",
@@ -712,10 +916,15 @@ def test_csv_import_with_only_bad_rows_creates_nothing(db):
     ]
 
 
-def test_csv_import_needs_ownership(db):
+def test_given_non_owner_when_importing_csv_then_403(db):
+    # Arrange
     _course(db)
     exam = _exam(db)
+
+    # Act
     resp = _upload_csv(exam.id, b"question_text\n", headers=OTHER_TEACHER)
+
+    # Assert
     assert resp.status_code == 403
 
 
@@ -730,7 +939,10 @@ def _upload_zip(url, data: bytes, headers=ADMIN, name="images.zip"):
     )
 
 
-def test_images_zip_attaches_question_and_option_images(db):
+def test_given_images_zip_when_uploaded_then_question_and_option_images_are_attached(
+    db,
+):
+    # Arrange
     exam = _exam(db)
     first = _question(db, exam.id, options=("A", "B", "C"), position=1)
     second = _question(db, exam.id, position=2)
@@ -747,9 +959,16 @@ def test_images_zip_attaches_question_and_option_images(db):
         }
     )
 
+    # Act
     resp = _upload_zip(f"/{exam.id}/questions/images-zip", bundle)
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert data["applied"] == 4
     assert data["skipped"] == 2
     assert data["errors"] == [
@@ -759,7 +978,11 @@ def test_images_zip_attaches_question_and_option_images(db):
     assert data["message"] == "Applied 4 image(s), skipped 2 file(s) with other names"
 
     db.expire_all()
+
+    # Act
     first, second = db.get(Question, first.id), db.get(Question, second.id)
+
+    # Assert
     assert first.question_image_url == "https://img/1-0.png"
     assert json.loads(first.option_images_json) == [
         None,
@@ -770,7 +993,8 @@ def test_images_zip_attaches_question_and_option_images(db):
     assert json.loads(second.option_images_json)[0]["url"] == "https://img/2-1.png"
 
 
-def test_images_zip_reports_upload_failures(db):
+def test_given_failing_image_upload_when_zip_processed_then_failures_are_reported(db):
+    # Arrange
     exam = _exam(db)
     _question(db, exam.id)
 
@@ -778,50 +1002,81 @@ def test_images_zip_reports_upload_failures(db):
         raise ValueError("Cloudinary credentials are not set")
 
     bulk_import.upload_image = fail  # restored by the autouse `uploads` fixture
+
+    # Act
     resp = _upload_zip(f"/{exam.id}/questions/images-zip", _zip({"1-0.png": PNG}))
+
+    # Assert
     assert resp.json()["applied"] == 0
     assert resp.json()["errors"] == ["1-0.png: Cloudinary credentials are not set"]
     assert resp.json()["message"] == "Applied 0 image(s)"
 
 
-def test_images_zip_rejects_bad_uploads(db, monkeypatch):
+def test_given_bad_zip_uploads_when_processed_then_415_422_or_413_is_returned(
+    db, monkeypatch
+):
+    # Arrange
     exam = _exam(db)
     url = f"/{exam.id}/questions/images-zip"
 
+    # Act and assert
     assert _upload_zip(url, b"x", name="images.rar").status_code == 415
+
+    # Act
     bad = _upload_zip(url, b"not a zip")
+
+    # Assert
     assert bad.status_code == 422
     assert bad.json()["detail"]["error"] == "INVALID_ZIP"
 
     monkeypatch.setattr(router, "_MAX_ZIP_SIZE", 10)
+
+    # Act and assert
     assert _upload_zip(url, _zip({"1-0.png": PNG})).status_code == 413
 
 
-def test_images_zip_needs_ownership(db):
+def test_given_non_owner_or_unknown_exam_when_uploading_images_zip_then_403_or_404(db):
+    # Arrange
     _course(db)
     exam = _exam(db)
+
+    # Act
     resp = _upload_zip(
         f"/{exam.id}/questions/images-zip", _zip({}), headers=OTHER_TEACHER
     )
+
+    # Assert
     assert resp.status_code == 403
+
+    # Act and assert
     assert _upload_zip("/999/questions/images-zip", _zip({})).status_code == 404
 
 
-def test_safe_zip_limits(monkeypatch):
+def test_given_zip_exceeding_entry_or_size_limits_when_read_then_it_is_rejected(
+    monkeypatch,
+):
+    # Arrange
     bundle = _zip({"a.txt": "x" * 100, "b.txt": "y"})
+
+    # Act and assert
     assert len(bulk_import.safe_zip(bundle).infolist()) == 2
 
     monkeypatch.setattr(bulk_import, "MAX_ZIP_ENTRIES", 1)
+
+    # Act and assert
     with pytest.raises(ValueError, match="more than 1 files"):
         bulk_import.safe_zip(bundle)
 
     monkeypatch.setattr(bulk_import, "MAX_ZIP_ENTRIES", 10)
     monkeypatch.setattr(bulk_import, "MAX_UNCOMPRESSED_BYTES", 50)
+
+    # Act and assert
     with pytest.raises(ValueError, match="300 MB"):
         bulk_import.safe_zip(bundle)
 
 
-def test_basename_handles_both_slashes():
+def test_given_paths_with_either_slash_when_basename_taken_then_last_segment_is_returned():
+    # Act and assert
     assert bulk_import._basename("a/b/1-0.png") == "1-0.png"
     assert bulk_import._basename("a\\b\\1-0.png") == "1-0.png"
     assert bulk_import._basename("1-0.png") == "1-0.png"
@@ -839,21 +1094,33 @@ QUESTIONS_CSV = (
 )
 
 
-def test_bulk_import_template_is_a_valid_bundle():
+def test_given_teacher_when_bulk_import_template_requested_then_a_valid_bundle_is_returned():
+    # Act
     resp = client.get("/bulk-import/template", headers=OWNER)
+
+    # Assert
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/zip"
+
+    # Act
     names = set(zipfile.ZipFile(io.BytesIO(resp.content)).namelist())
+
+    # Assert
     assert {
         "exams.csv",
         "questions/exam1/questions.csv",
         "questions/exam2/questions.csv",
         "README.md",
     } <= names
+
+    # Act and assert
     assert client.get("/bulk-import/template", headers=STUDENT).status_code == 403
 
 
-def test_bulk_import_creates_exams_and_reports_problems(db, sent):
+def test_given_bundle_with_good_and_bad_exams_when_bulk_imported_then_exams_created_and_problems_reported(
+    db, sent
+):
+    # Arrange
     _course(db)
     _exam(db, module_id=7, position=4)  # new exams are placed after this one
     exams_csv = (
@@ -882,9 +1149,16 @@ def test_bulk_import_creates_exams_and_reports_problems(db, sent):
         }
     )
 
+    # Act
     resp = _upload_zip("/bulk-import?course_id=10&module_id=7", bundle, headers=OWNER)
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert data["created_exams"] == 3
     assert data["total_questions_created"] == 6
     assert data["skipped_exams"] == 4
@@ -898,6 +1172,8 @@ def test_bulk_import_creates_exams_and_reports_problems(db, sent):
     assert "2026-08-01 09:00" in data["errors"][2]["message"]
 
     paper1, paper2, paper3 = data["details"]
+
+    # Act and assert
     assert paper1["images_applied"] == 1
     assert paper1["warnings"] == [
         "Row 4: at least option_a and option_b are required",
@@ -906,7 +1182,10 @@ def test_bulk_import_creates_exams_and_reports_problems(db, sent):
     assert "thumbnail missing.png not found" in paper2["warnings"]
     assert any(w.startswith("thumbnail bad.png:") for w in paper3["warnings"])
 
+    # Act
     exam1 = db.get(Assessment, int(paper1["exam_id"]))
+
+    # Assert
     assert exam1.is_published is False
     assert exam1.time_limit_minutes == 90
     assert exam1.image_url == "https://img/exam1.png"
@@ -916,7 +1195,10 @@ def test_bulk_import_creates_exams_and_reports_problems(db, sent):
     # checked in test_parse_helpers.
     assert exam1.scheduled_start.replace(tzinfo=None) == datetime(2026, 12, 1, 9, 0)
 
+    # Act
     exam2 = db.get(Assessment, int(paper2["exam_id"]))
+
+    # Assert
     assert (exam2.position, exam2.time_limit_minutes, exam2.is_published) == (
         2,
         60,
@@ -925,13 +1207,18 @@ def test_bulk_import_creates_exams_and_reports_problems(db, sent):
     assert exam2.description is None
 
     announced = {p["id"] for k, p in sent if k == ev.ASSESSMENT_UPSERTED}
+
+    # Act and assert
     assert announced == {int(d["exam_id"]) for d in data["details"]}
 
 
-def test_bulk_import_without_exams_csv(db):
+def test_given_bundle_without_exams_csv_when_bulk_imported_then_422_invalid_bundle(db):
+    # Act
     resp = _upload_zip(
         "/bulk-import?course_id=10", _zip({"readme.txt": "x"}), headers=ADMIN
     )
+
+    # Assert
     assert resp.status_code == 422
     assert resp.json()["detail"] == {
         "error": "INVALID_BUNDLE",
@@ -939,14 +1226,24 @@ def test_bulk_import_without_exams_csv(db):
     }
 
 
-def test_bulk_import_ignores_deeply_nested_exams_csv(db):
+def test_given_deeply_nested_exams_csv_when_bulk_imported_then_it_is_ignored_and_422_returned(
+    db,
+):
+    # Arrange
     bundle = _zip({"a/b/exams.csv": "folder,title\n"})
+
+    # Act
     resp = _upload_zip("/bulk-import?course_id=10", bundle, headers=ADMIN)
+
+    # Assert
     assert resp.status_code == 422
 
 
-def test_bulk_import_rejects_non_zip_and_non_owner(db):
+def test_given_non_zip_or_non_owner_when_bulk_importing_then_415_or_403(db):
+    # Arrange
     _course(db)
+
+    # Act and assert
     assert (
         _upload_zip("/bulk-import?course_id=10", b"x", name="b.txt").status_code == 415
     )
@@ -958,7 +1255,8 @@ def test_bulk_import_rejects_non_zip_and_non_owner(db):
     )
 
 
-def test_parse_helpers():
+def test_given_values_when_parse_helpers_run_then_valid_ones_parse_and_invalid_ones_raise():
+    # Act and assert
     assert bulk_import._parse_bool("", True) is True
     assert bulk_import._parse_bool(" YES ", False) is True
     assert bulk_import._parse_bool("no", True) is False
@@ -968,21 +1266,32 @@ def test_parse_helpers():
     assert bulk_import._parse_start("2026-08-01 09:00").utcoffset() == timedelta(
         hours=5, minutes=30
     )
+
+    # Act and assert
     with pytest.raises(ValueError):
         bulk_import._parse_start("01/08/2026")
 
 
-def test_import_question_rows_continues_positions(db):
+def test_given_existing_questions_when_rows_imported_then_positions_continue(db):
+    # Arrange
     exam = _exam(db)
     _question(db, exam.id, position=7)
+
+    # Act
     created, errors = bulk_import.import_question_rows(
         db,
         exam.id,
         "question_text,option_a,option_b,correct_answer,explanation\nQ,A,B,b,Why\n",
     )
     db.commit()
+
+    # Assert
     assert (created, errors) == (1, [])
+
+    # Act
     q = db.query(Question).filter(Question.position == 8).one()
+
+    # Assert
     assert q.correct_answer == "B" and q.explanation == "Why"
 
 
@@ -991,7 +1300,8 @@ def test_import_question_rows_continues_positions(db):
 # ---------------------------------------------------------------------------
 
 
-def test_upload_image_returns_url_then_public_id(monkeypatch):
+def test_given_image_when_uploaded_then_url_and_public_id_are_returned(monkeypatch):
+    # Arrange
     calls = []
 
     def upload(data, filename, folder, resource_type):
@@ -999,22 +1309,28 @@ def test_upload_image_returns_url_then_public_id(monkeypatch):
         return "pid-1", "https://img/1.png"
 
     monkeypatch.setattr(media, "upload", upload)
+
+    # Act and assert
     assert run(images.upload_image(PNG, "1.png")) == ("https://img/1.png", "pid-1")
     assert calls == [("1.png", media.UPLOAD_FOLDER, "image")]
 
 
-def test_upload_image_refuses_non_images():
+def test_given_non_image_when_uploaded_then_it_is_refused():
+    # Act and assert
     with pytest.raises(ValueError, match="not allowed"):
         run(images.upload_image(b"%PDF-1.4", "doc.png"))
     with pytest.raises(ValueError, match="empty"):
         run(images.upload_image(b"", "x.png"))
 
 
-def test_upload_image_wraps_storage_errors(monkeypatch):
+def test_given_storage_error_when_image_uploaded_then_error_is_wrapped(monkeypatch):
+    # Arrange
     def upload(*args):
         raise media.MediaError(503, "CLOUDINARY_NOT_CONFIGURED", "not configured")
 
     monkeypatch.setattr(media, "upload", upload)
+
+    # Act and assert
     with pytest.raises(ValueError, match="not configured"):
         run(images.upload_image(PNG, "1.png"))
 
@@ -1024,13 +1340,21 @@ def test_upload_image_wraps_storage_errors(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_student_cannot_start_a_draft(db):
+def test_given_draft_assessment_when_student_starts_it_then_404(db):
+    # Arrange
     draft = _exam(db, is_published=False)
+
+    # Act
     resp = client.post(f"/{draft.id}/start", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 404
 
 
-def test_teacher_can_preview_a_draft_without_enrollment(db, monkeypatch):
+def test_given_draft_assessment_when_teacher_previews_it_then_session_starts_without_enrollment(
+    db, monkeypatch
+):
+    # Arrange
     async def never(*args):
         raise AssertionError("staff previews skip the enrollment check")
 
@@ -1040,10 +1364,15 @@ def test_teacher_can_preview_a_draft_without_enrollment(db, monkeypatch):
         is_published=False,
         scheduled_start=datetime.now(timezone.utc) + timedelta(days=1),
     )
+
+    # Act and assert
     assert client.post(f"/{draft.id}/start", headers=OWNER).status_code == 200
 
 
-def test_start_without_time_limit_gives_an_hour(db):
+def test_given_assessment_without_time_limit_when_started_then_session_lasts_an_hour(
+    db,
+):
+    # Arrange
     exam = _exam(db, time_limit_minutes=None)
     _question(
         db,
@@ -1051,28 +1380,48 @@ def test_start_without_time_limit_gives_an_hour(db):
         options=("A", "B"),
         option_images_json=json.dumps([{"url": "https://img/a.png"}]),
     )
+
+    # Act
     resp = client.post(f"/{exam.id}/start", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert data["time_remaining_seconds"] == 3600
     assert data["questions"][0]["option_image_urls"] == ["https://img/a.png", None]
 
 
-def test_start_again_after_the_old_session_expired(db, redis):
+def test_given_expired_session_when_started_again_then_a_new_session_is_created(
+    db, redis
+):
+    # Arrange
     exam = _exam(db)
     redis.set(f"session:active:101:{exam.id}", "sess_old")  # session data already gone
 
+    # Act
     resp = client.post(f"/{exam.id}/start", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
     assert resp.json()["session_id"] != "sess_old"
 
 
-def test_past_scheduled_start_is_open(db):
+def test_given_scheduled_start_in_the_past_when_started_then_assessment_is_open(db):
+    # Arrange
     exam = _exam(db, scheduled_start=datetime(2020, 1, 1))
+
+    # Act and assert
     assert client.post(f"/{exam.id}/start", headers=STUDENT).status_code == 200
 
 
-def test_submit_grades_and_clears_the_session(db, redis):
+def test_given_active_session_when_submitted_then_attempt_is_graded_and_session_cleared(
+    db, redis
+):
+    # Arrange
     exam = _exam(db, pass_score=60)
     q1 = _question(db, exam.id, options=("def", "func"), answer="def", marks=2)
     q2 = _question(
@@ -1093,6 +1442,7 @@ def test_submit_grades_and_clears_the_session(db, redis):
     )
     session_id = client.post(f"/{exam.id}/start", headers=STUDENT).json()["session_id"]
 
+    # Act
     resp = client.post(
         f"/{exam.id}/submit",
         json={
@@ -1105,51 +1455,82 @@ def test_submit_grades_and_clears_the_session(db, redis):
         },
         headers=STUDENT,
     )
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
     # 2 of 4 marks; short answers wait for manual review.
+    # Assert
     assert (data["score"], data["passed"], data["correct_count"]) == (50.0, False, 1)
     assert data["auto_submitted"] is False
     review = {r["question_id"]: r for r in data["review"]}
+
+    # Act and assert
     assert review[q1.id]["is_correct"] is True
     assert review[q2.id]["is_correct"] is False
     assert review[q2.id]["selected_option_id"] == "True"
     assert review[q3.id]["is_correct"] is False and review[q3.id]["options"] == []
     assert data["ranking"]["exam_title"] == "Quiz"
 
+    # Act and assert
     assert redis.get(f"session:assessment:{session_id}") is None
     assert redis.get(f"session:active:101:{exam.id}") is None
+
+    # Act and assert
     assert db.query(Submission).count() == 1
 
 
-def test_submit_after_expiry_reuses_the_open_attempt(db, redis):
+def test_given_expired_session_when_submitted_then_the_open_attempt_is_reused(
+    db, redis
+):
+    # Arrange
     exam = _exam(db)
     _question(db, exam.id)
     session_id = client.post(f"/{exam.id}/start", headers=STUDENT).json()["session_id"]
     redis.delete(f"session:assessment:{session_id}")  # the timer ran out
 
+    # Act
     resp = client.post(
         f"/{exam.id}/submit", json={"session_id": session_id}, headers=STUDENT
     )
+
+    # Assert
     assert resp.json()["auto_submitted"] is True
     assert resp.json()["score"] == 0.0
+
+    # Act
     (sub,) = db.query(Submission).all()
+
+    # Assert
     assert sub.status == SubmissionStatus.graded
 
 
-def test_submit_exam_without_questions_scores_zero(db):
+def test_given_exam_without_questions_when_submitted_then_score_is_zero(db):
+    # Arrange
     exam = _exam(db)
+
+    # Act
     resp = client.post(f"/{exam.id}/submit", json={"session_id": "x"}, headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
     assert (resp.json()["score"], resp.json()["total_questions"]) == (0.0, 0)
 
 
-def test_submit_missing_exam_404(db):
+def test_given_unknown_exam_when_submitted_then_404(db):
+    # Act
     resp = client.post("/999/submit", json={"session_id": "x"}, headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 404
 
 
-def test_badge_failure_does_not_fail_the_submit(db, monkeypatch):
+def test_given_badge_awarding_fails_when_submitted_then_submission_still_succeeds(
+    db, monkeypatch
+):
+    # Arrange
     exam = _exam(db)
     _question(db, exam.id)
 
@@ -1157,12 +1538,19 @@ def test_badge_failure_does_not_fail_the_submit(db, monkeypatch):
         raise RuntimeError("badge table locked")
 
     monkeypatch.setattr(router, "evaluate_after_attempt", broken)
+
+    # Act
     resp = client.post(f"/{exam.id}/submit", json={"session_id": "x"}, headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
     assert resp.json()["new_badges"] == []
 
 
-def test_submit_returns_new_badges(db, seeded_badges):
+def test_given_new_badges_earned_when_submitted_then_response_lists_them(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
     q = _question(db, exam.id)
     resp = client.post(
@@ -1173,11 +1561,18 @@ def test_submit_returns_new_badges(db, seeded_badges):
         },
         headers=STUDENT,
     )
+
+    # Act
     keys = {b["criteria_key"] for b in resp.json()["new_badges"]}
+
+    # Assert
     assert {"perfect_100", "first_step", "speed_demon"} <= keys
 
 
-def test_my_last_attempt(db):
+def test_given_graded_attempts_when_last_attempt_requested_then_latest_attempt_returned(
+    db,
+):
+    # Arrange
     exam = _exam(db, pass_score=50)
     q = _question(db, exam.id, answer="A")
     old = datetime.now(timezone.utc) - timedelta(days=1)
@@ -1190,17 +1585,29 @@ def test_my_last_attempt(db):
         answers_json=json.dumps([{"question_id": q.id, "selected_option": "A"}]),
     )
 
+    # Act
     resp = client.get(f"/{exam.id}/my-last-attempt", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert (data["score"], data["passed"], data["correct_count"]) == (100.0, True, 1)
     assert data["time_taken_seconds"] == 90
     assert data["session_id"] == ""
 
 
-def test_my_last_attempt_404_without_one(db):
+def test_given_no_attempt_when_last_attempt_requested_then_404_no_attempt_found(db):
+    # Arrange
     exam = _exam(db)
+
+    # Act
     resp = client.get(f"/{exam.id}/my-last-attempt", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "NO_ATTEMPT_FOUND"
 
@@ -1210,7 +1617,8 @@ def test_my_last_attempt_404_without_one(db):
 # ---------------------------------------------------------------------------
 
 
-def test_my_attempts_summary_per_exam(db):
+def test_given_attempts_when_my_attempts_requested_then_summary_per_exam_returned(db):
+    # Arrange
     a = _exam(db, pass_score=60)
     b = _exam(db, pass_score=60)
     _exam(db, course_id=11)
@@ -1221,7 +1629,11 @@ def test_my_attempts_summary_per_exam(db):
     _graded(db, a.id, student_id=102, score=100)  # someone else
 
     resp = client.get("/my-attempts?course_id=10", headers=STUDENT)
+
+    # Act
     summary = {s["assessment_id"]: s for s in resp.json()}
+
+    # Assert
     assert summary[a.id] == {
         "assessment_id": a.id,
         "attempt_count": 2,
@@ -1231,11 +1643,13 @@ def test_my_attempts_summary_per_exam(db):
     assert summary[b.id]["passed"] is False
 
 
-def test_my_attempts_for_course_without_exams():
+def test_given_course_without_exams_when_my_attempts_requested_then_empty_list_returned():
+    # Act and assert
     assert client.get("/my-attempts?course_id=99", headers=STUDENT).json() == []
 
 
-def test_my_submissions_lists_attempts_newest_first(db):
+def test_given_attempts_when_my_submissions_requested_then_listed_newest_first(db):
+    # Arrange
     _course(db, title="Python Basics")
     _student(db, 101, district="Colombo")
     exam = _exam(db, module_id=7)
@@ -1254,12 +1668,21 @@ def test_my_submissions_lists_attempts_newest_first(db):
     db.delete(gone)
     db.commit()
 
+    # Act
     resp = client.get("/my-submissions", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     items = resp.json()
+
+    # Assert
     assert [i["attempt_id"] for i in items] == [second.id, first.id]
     assert [i["attempt_number"] for i in items] == [2, 1]
     newest = items[0]
+
+    # Act and assert
     assert newest["course_title"] == "Python Basics"
     assert newest["sub_course_id"] == 7
     assert (newest["marks_obtained"], newest["total_questions"]) == (1, 1)
@@ -1267,7 +1690,10 @@ def test_my_submissions_lists_attempts_newest_first(db):
     assert (newest["overall_rank"], newest["district_rank"]) == (1, 1)
 
 
-def test_my_submissions_empty_and_limit(db):
+def test_given_no_attempts_or_bad_limit_when_my_submissions_requested_then_empty_list_or_422(
+    db,
+):
+    # Act and assert
     assert client.get("/my-submissions", headers=STUDENT).json() == []
     assert client.get("/my-submissions?limit=0", headers=STUDENT).status_code == 422
     assert client.get("/my-submissions?limit=51", headers=STUDENT).status_code == 422
@@ -1295,12 +1721,21 @@ def attempt(db):
     )
 
 
-def test_student_reviews_own_attempt(attempt):
+def test_given_graded_attempt_when_student_reviews_it_then_review_returned(attempt):
+    # Act
     resp = client.get(f"/submissions/{attempt.id}/review", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
+
+    # Act
     data = resp.json()
+
+    # Assert
     assert (data["score"], data["passed"], data["marks_obtained"]) == (100.0, True, 1)
     (item,) = data["review"]
+
+    # Act and assert
     assert item["is_correct"] is True
     assert item["explanation"] == "Because"
     assert item["question_image_url"] == "https://img/q.png"
@@ -1309,16 +1744,21 @@ def test_student_reviews_own_attempt(attempt):
     assert data["ranking"]["overall_rank"] == 1
 
 
-def test_review_visibility(attempt):
+def test_given_attempt_when_reviewed_by_owner_teacher_or_other_student_then_visibility_rules_apply(
+    attempt,
+):
+    # Arrange
     url = f"/submissions/{attempt.id}/review"
     # Another student must not even learn that the attempt exists.
+    # Act and assert
     assert client.get(url, headers=OTHER_STUDENT).status_code == 404
     assert client.get(url, headers=ADMIN).status_code == 200
     assert client.get(url, headers=OWNER).status_code == 200
     assert client.get(url, headers=OTHER_TEACHER).status_code == 403
 
 
-def test_review_of_missing_or_unfinished_attempts(db, attempt):
+def test_given_missing_or_unfinished_attempt_when_reviewed_then_404(db, attempt):
+    # Arrange
     open_attempt = Submission(
         assessment_id=attempt.assessment_id,
         student_id=101,
@@ -1326,6 +1766,8 @@ def test_review_of_missing_or_unfinished_attempts(db, attempt):
     )
     db.add(open_attempt)
     db.commit()
+
+    # Act and assert
     assert client.get("/submissions/999/review", headers=STUDENT).status_code == 404
     assert (
         client.get(
@@ -1336,7 +1778,11 @@ def test_review_of_missing_or_unfinished_attempts(db, attempt):
 
     db.query(Assessment).delete()
     db.commit()
+
+    # Act
     resp = client.get(f"/submissions/{attempt.id}/review", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "ATTEMPT_NOT_FOUND"
 
@@ -1358,20 +1804,30 @@ def test_review_of_missing_or_unfinished_attempts(db, attempt):
         ("looked away", ViolationType.other),
     ],
 )
-def test_violation_types(db, raw, expected):
+def test_given_violation_types_when_reported_then_204(db, raw, expected):
+    # Arrange
     exam = _exam(db)
+
+    # Act
     resp = client.post(
         f"/{exam.id}/violations",
         json={"session_id": "none", "violation_type": raw},
         headers=STUDENT,
     )
+
+    # Assert
     assert resp.status_code == 204
+
+    # Act
     log = db.query(ViolationLog).one()
+
+    # Assert
     assert log.violation_type == expected
     assert log.detail == f"Violation recorded: {raw}"
 
 
-def test_violation_without_session_uses_latest_attempt(db):
+def test_given_no_session_when_violation_reported_then_latest_attempt_is_used(db):
+    # Arrange
     exam = _exam(db)
     _graded(db, exam.id)
     latest = _graded(db, exam.id)
@@ -1385,24 +1841,33 @@ def test_violation_without_session_uses_latest_attempt(db):
         },
         headers=STUDENT,
     )
+
+    # Act
     log = db.query(ViolationLog).one()
+
+    # Assert
     assert log.submission_id == latest.id
     assert log.detail == "Alt+Tab"
 
 
-def test_violation_with_no_attempt_opens_one(db):
+def test_given_no_attempt_when_violation_reported_then_an_attempt_is_opened(db):
+    # Arrange
     exam = _exam(db)
     client.post(
         f"/{exam.id}/violations",
         json={"session_id": "none", "violation_type": "tab_switch"},
         headers=STUDENT,
     )
+
     sub = db.query(Submission).one()
+
+    # Act and assert
     assert sub.status == SubmissionStatus.in_progress
     assert db.query(ViolationLog).one().submission_id == sub.id
 
 
-def test_violation_during_a_session_uses_its_attempt(db):
+def test_given_active_session_when_violation_reported_then_its_attempt_is_used(db):
+    # Arrange
     exam = _exam(db)
     session_id = client.post(f"/{exam.id}/start", headers=STUDENT).json()["session_id"]
     _graded(db, exam.id)  # a newer row must not steal the violation
@@ -1412,7 +1877,10 @@ def test_violation_during_a_session_uses_its_attempt(db):
         json={"session_id": session_id, "violation_type": "tab_switch"},
         headers=STUDENT,
     )
+
     started = db.query(Submission).filter_by(status=SubmissionStatus.in_progress).one()
+
+    # Act and assert
     assert db.query(ViolationLog).one().submission_id == started.id
 
 
@@ -1421,7 +1889,10 @@ def test_violation_during_a_session_uses_its_attempt(db):
 # ---------------------------------------------------------------------------
 
 
-def test_ranking_exams_for_visitors_lists_every_attempted_exam(db):
+def test_given_visitor_when_ranking_exams_requested_then_every_attempted_exam_is_listed(
+    db,
+):
+    # Arrange
     _course(db, 10, title="Python")
     _course(db, 11, title="Biology")
     py = _exam(db, title="Loops")
@@ -1431,23 +1902,35 @@ def test_ranking_exams_for_visitors_lists_every_attempted_exam(db):
     for exam in (py, bio, draft):
         _graded(db, exam.id, student_id=102)
 
+    # Act
     rows = client.get("/rankings/exams").json()
+
+    # Assert
     assert [(r["course_title"], r["exam_title"]) for r in rows] == [
         ("Biology", "Cells"),
         ("Python", "Loops"),
     ]
     # A student only sees exams they sat themselves.
+    # Act and assert
     assert client.get("/rankings/exams", headers=STUDENT).json() == []
 
 
-def test_leaderboard_pages_and_unknown_exam(db):
+def test_given_paging_or_unknown_exam_when_leaderboard_requested_then_pages_are_returned_and_unknown_exam_is_404(
+    db,
+):
+    # Arrange
     exam = _exam(db)
     for i, uid in enumerate((101, 102, 103)):
         _student(db, uid)
         _graded(db, exam.id, student_id=uid, score=90 - i * 10)
 
+    # Act
     page = client.get(f"/rankings/leaderboard?exam_id={exam.id}&limit=1&offset=1")
+
+    # Assert
     assert [(r["rank"], r["full_name"]) for r in page.json()] == [(2, "Student 102")]
+
+    # Act and assert
     assert client.get("/rankings/leaderboard?exam_id=999").status_code == 404
     assert (
         client.get(f"/rankings/leaderboard?exam_id={exam.id}&limit=0").status_code
@@ -1455,7 +1938,10 @@ def test_leaderboard_pages_and_unknown_exam(db):
     )
 
 
-def test_leaderboard_when_profiles_are_unavailable(db, monkeypatch):
+def test_given_profiles_unavailable_when_leaderboard_requested_then_leaderboard_is_still_returned(
+    db, monkeypatch
+):
+    # Arrange
     exam = _exam(db)
     _graded(db, exam.id, student_id=101, score=90)
     _graded(db, exam.id, student_id=900, score=95)
@@ -1464,21 +1950,33 @@ def test_leaderboard_when_profiles_are_unavailable(db, monkeypatch):
         return None
 
     monkeypatch.setattr(router, "get_profiles", no_profiles)
+
+    # Act
     rows = client.get(f"/rankings/leaderboard?exam_id={exam.id}").json()
     # Without profiles nobody can be filtered out, and everyone is shown unnamed.
+    # Assert
     assert [(r["full_name"], r["district"], r["grade"]) for r in rows] == [
         ("Student", "", 0),
         ("Student", "", 0),
     ]
 
 
-def test_my_rank_is_null_before_sitting(db):
+def test_given_student_who_has_not_sat_the_exam_when_rank_requested_then_rank_is_null(
+    db,
+):
+    # Arrange
     _course(db)
     exam = _exam(db)
+
+    # Act
     resp = client.get(f"/rankings/exam/{exam.id}", headers=STUDENT)
+
+    # Assert
     assert resp.status_code == 200
     assert resp.json()["overall_rank"] is None
     assert resp.json()["course_title"] == "Python"
+
+    # Act and assert
     assert client.get(f"/rankings/exam/{exam.id}").status_code == 401
 
 
@@ -1487,25 +1985,42 @@ def test_my_rank_is_null_before_sitting(db):
 # ---------------------------------------------------------------------------
 
 
-def test_badge_catalogue_is_public_and_sorted(seeded_badges):
+def test_given_no_token_when_badge_catalogue_requested_then_sorted_badges_returned(
+    seeded_badges,
+):
+    # Act
     rows = client.get("/badges").json()
+
+    # Assert
     assert len(rows) == len(badges.BADGE_DEFINITIONS)
     assert rows == sorted(rows, key=lambda b: (b["category"], b["name"]))
 
 
-def test_my_badges_and_dashboard(db, seeded_badges):
+def test_given_student_when_badges_requested_then_own_badges_and_dashboard_returned_and_no_token_is_401(
+    db, seeded_badges
+):
+    # Arrange
     trophy = db.query(Badge).filter_by(criteria_key="perfect_100").one()
     db.add(UserBadge(student_id=101, badge_id=trophy.id))
     db.add(UserBadge(student_id=102, badge_id=trophy.id))
     db.commit()
 
+    # Act
     mine = client.get("/badges/my", headers=STUDENT).json()
+
+    # Assert
     assert [(b["user_id"], b["badge"]["criteria_key"]) for b in mine] == [
         (101, "perfect_100")
     ]
+
+    # Act
     dash = client.get("/badges/dashboard", headers=STUDENT).json()
+
+    # Assert
     assert len(dash["available_badges"]) == len(badges.BADGE_DEFINITIONS)
     assert len(dash["earned_badges"]) == 1
+
+    # Act and assert
     assert client.get("/badges/my").status_code == 401
 
 
@@ -1524,100 +2039,178 @@ def _local_to_utc(hour, minute=0, day=1) -> datetime:
     return local - badges.LOCAL_OFFSET
 
 
-def test_seed_badges_is_idempotent(db):
+def test_given_seeded_badges_when_seeding_runs_again_then_no_duplicates_are_created(db):
+    # Arrange
     badges.seed_badges(db)
     badges.seed_badges(db)
+
+    # Act and assert
     assert db.query(Badge).count() == len(badges.BADGE_DEFINITIONS)
 
 
-def test_early_bird(db, seeded_badges):
+def test_given_early_morning_attempt_when_badges_checked_then_early_bird_is_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
+
     sub = _graded(db, exam.id, score=10, when=_local_to_utc(5, 30), seconds=600)
+
+    # Act and assert
     assert "early_bird" in _earned(db, sub, exam)  # started 05:20 local
 
 
 @pytest.mark.parametrize("hour", [23, 1])
-def test_night_owl(db, seeded_badges, hour):
+def test_given_late_night_attempt_when_badges_checked_then_night_owl_is_awarded(
+    db, seeded_badges, hour
+):
+    # Arrange
     exam = _exam(db)
+
     sub = _graded(db, exam.id, score=10, when=_local_to_utc(hour))
+
+    # Act and assert
     assert "night_owl" in _earned(db, sub, exam)
 
 
-def test_daytime_attempt_earns_no_time_badges(db, seeded_badges):
+def test_given_daytime_attempt_when_badges_checked_then_no_time_badges_are_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
+
     sub = _graded(db, exam.id, score=10, when=_local_to_utc(12))
+
+    # Act and assert
     assert not {"early_bird", "night_owl"} & _earned(db, sub, exam)
 
 
-def test_consistency_king_needs_seven_days(db, seeded_badges):
+def test_given_seven_consecutive_days_of_attempts_when_badges_checked_then_consistency_king_is_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
     now = datetime.now(timezone.utc)
     for days in range(1, 6):
         _graded(db, exam.id, score=10, when=now - timedelta(days=days))
+
     sub = _graded(db, exam.id, score=10, when=now)
+
+    # Act and assert
     assert "consistency_king" not in _earned(db, sub, exam)  # six days
 
     _graded(db, exam.id, score=10, when=now - timedelta(days=6))
+
     sub = _graded(db, exam.id, score=10, when=now)
+
+    # Act and assert
     assert "consistency_king" in _earned(db, sub, exam)
 
 
-def test_speed_demon_needs_a_third_of_the_time(db, seeded_badges):
+def test_given_attempt_finished_within_a_third_of_the_time_when_badges_checked_then_speed_demon_is_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db, time_limit_minutes=15)  # a third is 300 seconds
+
     slow = _graded(db, exam.id, score=90, seconds=301)
+
+    # Act and assert
     assert "speed_demon" not in _earned(db, slow, exam)
+
     fast = _graded(db, exam.id, student_id=102, score=90, seconds=299)
+
+    # Act and assert
     assert "speed_demon" in _earned(db, fast, exam)
 
 
-def test_speed_demon_without_time_limit_uses_an_hour(db, seeded_badges):
+def test_given_exam_without_time_limit_when_speed_demon_checked_then_one_hour_is_used(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db, time_limit_minutes=None)
+
     sub = _graded(db, exam.id, score=90, seconds=1199)
+
+    # Act and assert
     assert "speed_demon" in _earned(db, sub, exam)
 
 
-def test_improved_star(db, seeded_badges):
+def test_given_improved_score_on_retake_when_badges_checked_then_improved_star_is_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
     now = datetime.now(timezone.utc)
     _graded(db, exam.id, score=50, when=now - timedelta(hours=1))
+
     worse = _graded(db, exam.id, score=40, when=now - timedelta(minutes=30))
+
+    # Act and assert
     assert "improved_star" not in _earned(db, worse, exam)
+
     better = _graded(db, exam.id, score=60, when=now)
+
+    # Act and assert
     assert "improved_star" in _earned(db, better, exam)
 
 
-def test_perfect_100_only_on_the_first_attempt(db, seeded_badges):
+def test_given_perfect_score_when_badges_checked_then_perfect_100_is_awarded_only_on_the_first_attempt(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
     now = datetime.now(timezone.utc)
     _graded(db, exam.id, score=50, when=now - timedelta(hours=1))
+
     retake = _graded(db, exam.id, score=100, when=now)
+
+    # Act and assert
     assert "perfect_100" not in _earned(db, retake, exam)
 
 
-def test_subject_expert_needs_five_first_passes_in_one_lesson(db, seeded_badges):
+def test_given_five_first_passes_in_one_lesson_when_badges_checked_then_subject_expert_is_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exams = [_exam(db, module_id=7) for _ in range(5)]
     now = datetime.now(timezone.utc)
     for i, exam in enumerate(exams[:4]):
         _graded(db, exam.id, score=90, when=now - timedelta(hours=10 - i))
     # A retake that passes does not replace a failed first attempt.
     _graded(db, exams[4].id, score=50, when=now - timedelta(hours=2))
+
     retake = _graded(db, exams[4].id, score=95, when=now - timedelta(hours=1))
+
+    # Act and assert
     assert "subject_expert" not in _earned(db, retake, exams[4])
 
     sixth = _exam(db, module_id=7)
+
     sub = _graded(db, sixth.id, score=90, when=now)
+
+    # Act and assert
     assert "subject_expert" in _earned(db, sub, sixth)
 
 
-def test_first_step_only_on_the_first_paper(db, seeded_badges):
+def test_given_first_paper_when_badges_checked_then_first_step_is_awarded_only_once(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
     now = datetime.now(timezone.utc)
     _graded(db, exam.id, score=10, when=now - timedelta(hours=1))
+
     second = _graded(db, _exam(db).id, score=90, when=now)
+
+    # Act and assert
     assert "first_step" not in _earned(db, second, exam)
 
 
-def test_century_club(db, seeded_badges):
+def test_given_one_hundred_attempts_when_badges_checked_then_century_club_is_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
     start = datetime.now(timezone.utc) - timedelta(days=200)
     db.add_all(
@@ -1632,9 +2225,15 @@ def test_century_club(db, seeded_badges):
         for i in range(98)
     )
     db.commit()
+
     sub = _graded(db, exam.id, score=10)
+
+    # Act and assert
     assert "century_club" not in _earned(db, sub, exam)  # 99 papers
+
     sub = _graded(db, exam.id, score=10)
+
+    # Act and assert
     assert "century_club" in _earned(db, sub, exam)
 
 
@@ -1651,45 +2250,71 @@ def _four_weeks(db, exam, student_id=101):
     return _graded(db, exam.id, student_id=student_id, score=10, when=now)
 
 
-def test_junior_scholar_needs_four_active_weeks_and_an_old_account(db, seeded_badges):
+def test_given_four_active_weeks_and_an_old_account_when_badges_checked_then_junior_scholar_is_awarded(
+    db, seeded_badges
+):
+    # Arrange
     exam = _exam(db)
     now = datetime.now(timezone.utc)
     _student(db, 101, account_created_at=now - timedelta(days=30))
+
+    # Act and assert
     assert "junior_scholar" in _earned(db, _four_weeks(db, exam, 101), exam)
 
     _student(db, 102, account_created_at=now - timedelta(days=20))
+
+    # Act and assert
     assert "junior_scholar" not in _earned(db, _four_weeks(db, exam, 102), exam)
 
     _student(db, 103)  # account age unknown
+
+    # Act and assert
     assert "junior_scholar" not in _earned(db, _four_weeks(db, exam, 103), exam)
 
 
-def test_badges_are_awarded_once_and_announced(db, seeded_badges, sent):
+def test_given_earned_badge_when_awarded_twice_then_it_is_stored_once_and_announced(
+    db, seeded_badges, sent
+):
+    # Arrange
     exam = _exam(db)
+
     first = _graded(db, exam.id, score=100, seconds=30)
+
+    # Act and assert
     assert "perfect_100" in _earned(db, first, exam)
     assert ("perfect_100") in {p["badge_key"] for k, p in sent if k == ev.BADGE_AWARDED}
 
     again = _graded(db, _exam(db).id, score=100, seconds=30)
+
+    # Act and assert
     assert "perfect_100" not in _earned(db, again, exam)
 
 
-def test_concurrent_award_is_skipped(db, seeded_badges, sent):
+def test_given_concurrent_award_when_badge_awarded_then_the_duplicate_is_skipped(
+    db, seeded_badges, sent
+):
+    # Arrange
     exam = _exam(db)
+
     sub = _graded(db, exam.id, score=10)
     trophy = db.query(Badge).filter_by(criteria_key="perfect_100").one()
     db.add(UserBadge(student_id=101, badge_id=trophy.id))  # written by another request
     db.commit()
 
+    # Act and assert
     assert badges._award(db, 101, "perfect_100", owned=set()) is None
     assert sent == []
     assert badges._award(db, 101, "no_such_badge", owned=set()) is None
     assert sub.id  # the session is still usable after the rollback
 
 
-def test_local_time_conversion():
+def test_given_utc_time_when_converted_to_local_time_then_sri_lanka_time_is_returned():
+    # Act and assert
     assert badges._local(datetime(2026, 1, 1, 0, 0)).hour == 5  # naive is UTC
+
     aware = datetime(2026, 1, 1, 0, 0, tzinfo=timezone(timedelta(hours=1)))
+
+    # Act and assert
     assert badges._local(aware).hour == 4  # 23:00 UTC + 05:30
 
 
@@ -1698,7 +2323,10 @@ def test_local_time_conversion():
 # ---------------------------------------------------------------------------
 
 
-def test_resync_announces_exams_badges_and_graded_attempts(db, seeded_badges, sent):
+def test_given_existing_data_when_resync_runs_then_exams_badges_and_graded_attempts_are_announced(
+    db, seeded_badges, sent
+):
+    # Act
     exam = _exam(db, module_id=7, pass_score=60)
     q1 = _question(db, exam.id, answer="A")
     _question(db, exam.id, answer="B", position=2)
@@ -1726,17 +2354,24 @@ def test_resync_announces_exams_badges_and_graded_attempts(db, seeded_badges, se
     by_key = {}
     for key, payload in sent:
         by_key.setdefault(key, []).append(payload)
+
+    # Assert
     assert [p["id"] for p in by_key[ev.ASSESSMENT_UPSERTED]] == [exam.id]
     assert by_key[ev.BADGE_AWARDED][0]["badge_key"] == "perfect_100"
     (result,) = by_key[ev.ASSESSMENT_GRADED]
+
+    # Act and assert
     assert result["submission_id"] == graded.id
     assert (result["marks_obtained"], result["total_questions"]) == (1, 2)
     assert result["passed"] is False and result["module_id"] == 7
     assert result["time_seconds"] == 75
 
 
-def test_resync_on_an_empty_database(sent):
+def test_given_empty_database_when_resync_runs_then_nothing_is_announced(sent):
+    # Act
     resync.announce_everything()
+
+    # Assert
     assert sent == []
 
 
@@ -1745,17 +2380,31 @@ def test_resync_on_an_empty_database(sent):
 # ---------------------------------------------------------------------------
 
 
-def test_assessment_event_payload(db):
+def test_given_assessment_when_event_payload_built_then_it_carries_the_assessment_fields(
+    db,
+):
+    # Arrange
     exam = _exam(db, position=None)
     exam.created_at = None
+
+    # Act
     payload = events.assessment_event(exam)
+
+    # Assert
     assert payload["position"] == 0 and payload["created_at"] is None
     assert payload["is_published"] is True
 
 
-def test_badge_and_graded_events_without_timestamps(sent):
+def test_given_badge_and_graded_events_without_timestamps_when_built_then_timestamps_default(
+    sent,
+):
+    # Arrange
     events.announce_badge(101, "first_step", None)
+
+    # Act
     events.publish_assessment_graded(101, 1, 50.0, False)
+
+    # Assert
     assert sent[0] == (
         ev.BADGE_AWARDED,
         {"student_id": 101, "badge_key": "first_step", "awarded_at": None},
@@ -1763,17 +2412,21 @@ def test_badge_and_graded_events_without_timestamps(sent):
     assert sent[1][1]["submitted_at"] is None and sent[1][1]["course_id"] is None
 
 
-def test_lookups_with_no_ids_skip_the_database(monkeypatch):
+def test_given_no_ids_when_lookups_run_then_the_database_is_not_queried(monkeypatch):
+    # Arrange
     def no_db():
         raise AssertionError("should not open a session")
 
     monkeypatch.setattr(catalog, "SessionLocal", no_db)
     monkeypatch.setattr(people, "SessionLocal", no_db)
+
+    # Act and assert
     assert run(catalog.get_course_titles([])) == {}
     assert run(people.get_profiles([])) == {}
 
 
-def test_unknown_course_has_no_instructor():
+def test_given_unknown_course_when_instructor_looked_up_then_none_is_returned():
+    # Act and assert
     assert run(catalog.get_course_instructor_id(404)) is None
 
 
@@ -1782,22 +2435,36 @@ def test_unknown_course_has_no_instructor():
 # ---------------------------------------------------------------------------
 
 
-def test_memory_redis_get_set_delete():
+def test_given_in_memory_redis_when_value_set_read_and_deleted_then_it_behaves_like_redis():
+    # Arrange
     r = MemoryRedisClient()
+
+    # Act and assert
     assert r.get("k") is None
     r.set("k", 5)
+
+    # Act and assert
     assert r.get("k") == "5"
     r.delete("k")
     r.delete("k")  # deleting twice is fine
+
+    # Act and assert
     assert r.get("k") is None
 
 
-def test_memory_redis_ttl():
+def test_given_in_memory_redis_when_ttl_requested_then_remaining_time_is_reported():
+    # Arrange
     r = MemoryRedisClient()
+
+    # Act and assert
     assert r.ttl("missing") == -2
     r.set("forever", "v")
+
+    # Act and assert
     assert r.ttl("forever") == -1
     r.set("timed", "v", ex=60)
+
+    # Act and assert
     assert 58 <= r.ttl("timed") <= 60
 
 
@@ -1806,29 +2473,38 @@ def _expire(r: MemoryRedisClient, key: str):
     r._store[key] = (value, datetime.now(timezone.utc) - timedelta(seconds=1))
 
 
-def test_memory_redis_expiry():
+def test_given_in_memory_redis_when_value_expires_then_it_is_no_longer_returned():
+    # Arrange
     r = MemoryRedisClient()
     for key in ("a", "b", "c"):
         r.set(key, "v", ex=60)
         _expire(r, key)
+
+    # Act and assert
     assert r.get("a") is None
+
+    # Act and assert
     assert r.ttl("b") == -2
     assert r.keys("*") == []
     assert r._store == {}
 
 
-def test_memory_redis_keys_by_prefix():
+def test_given_in_memory_redis_when_keys_listed_by_prefix_then_matching_keys_are_returned():
+    # Act
     r = MemoryRedisClient()
     r.set("session:active:1", "x")
     r.set("session:active:2", "y", ex=60)
     r.set("other", "z")
+
+    # Assert
     assert sorted(r.keys("session:active:*")) == [
         "session:active:1",
         "session:active:2",
     ]
 
 
-def test_get_redis_client_returns_the_module_client():
+def test_given_module_client_when_redis_client_requested_then_the_same_client_is_returned():
+    # Act and assert
     assert redis_client.get_redis_client() is redis_client.redis_client
 
 
@@ -1837,22 +2513,33 @@ def test_get_redis_client_returns_the_module_client():
 # ---------------------------------------------------------------------------
 
 
-def test_answers_of_tolerates_bad_json():
+def test_given_bad_json_when_answers_read_then_empty_answers_are_returned():
+    # Act and assert
     assert router._answers_of(Submission(answers_json="not json")) == {}
     assert router._answers_of(Submission(answers_json='[{"no_id": 1}]')) == {}
     assert router._answers_of(Submission(answers_json=None)) == {}
+
     sub = Submission(answers_json='[{"question_id": "3", "selected_option": null}]')
+
+    # Act and assert
     assert router._answers_of(sub) == {3: ""}
 
 
-def test_time_taken_edge_cases():
+def test_given_edge_case_timestamps_when_time_taken_computed_then_expected_values_are_returned():
+    # Arrange
     now = datetime.now(timezone.utc)
+
+    # Act and assert
     assert router._time_taken(Submission(started_at=None, submitted_at=now)) == 0
+
     backwards = Submission(started_at=now, submitted_at=now - timedelta(seconds=5))
+
+    # Act and assert
     assert router._time_taken(backwards) == 0
 
 
-def test_question_helpers_tolerate_bad_json():
+def test_given_bad_json_when_question_helpers_run_then_they_do_not_fail():
+    # Arrange
     q = Question(
         id=1,
         assessment_id=1,
@@ -1864,23 +2551,38 @@ def test_question_helpers_tolerate_bad_json():
         marks=1,
         position=1,
     )
+
+    # Act and assert
     assert router._option_images(q, 2) == [None, None]
     assert router._question_to_admin_response(q).options == []
+
+    # Act
     (item,) = router._build_review([q], {1: "A"})
+
+    # Assert
     assert item.options == [] and item.is_correct is True
 
 
-def test_option_images_are_padded_and_trimmed():
+def test_given_option_image_lists_of_any_length_when_normalised_then_they_are_padded_or_trimmed():
+    # Arrange
     q = Question(
         option_images_json=json.dumps([{"url": "a"}, {"url": "b"}, {"url": "c"}])
     )
+
+    # Act and assert
     assert router._option_images(q, 2) == [{"url": "a"}, {"url": "b"}]
     assert router._option_images(q, 4)[3] is None
 
 
-def test_as_utc():
+def test_given_naive_and_aware_times_when_converted_to_utc_then_both_are_aware():
+    # Arrange
     naive = datetime(2026, 1, 1, 9)
+
+    # Act and assert
     assert router._as_utc(naive).tzinfo == timezone.utc
+
     aware = datetime(2026, 1, 1, 9, tzinfo=timezone(timedelta(hours=5)))
+
+    # Act and assert
     assert router._as_utc(aware) is aware
     assert router._as_utc(None) is None
