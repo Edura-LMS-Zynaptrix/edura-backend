@@ -55,24 +55,31 @@ def _auth(user_id: int, role: str) -> dict:
 
 
 class TestAssertCourseOwner:
-    def test_matching_teacher_passes(self):
+    def test_given_matching_teacher_when_ownership_asserted_then_it_passes(self):
         course = MagicMock()
         course.instructor_id = 42
         assert_course_owner(
             course, requester_id=42, requester_role="teacher"
         )  # no raise
 
-    def test_mismatched_teacher_raises_403(self):
+    def test_given_other_teacher_when_ownership_asserted_then_403_not_course_owner(
+        self,
+    ):
+        # Arrange
         from fastapi import HTTPException
 
         course = MagicMock()
         course.instructor_id = 42
+
+        # Act and assert
         with pytest.raises(HTTPException) as exc_info:
             assert_course_owner(course, requester_id=99, requester_role="teacher")
+
+        # Act and assert
         assert exc_info.value.status_code == 403
         assert exc_info.value.detail["error"] == "NOT_COURSE_OWNER"
 
-    def test_admin_bypasses_ownership(self):
+    def test_given_admin_when_ownership_asserted_then_it_passes(self):
         course = MagicMock()
         course.instructor_id = 42
         assert_course_owner(course, requester_id=99, requester_role="admin")  # no raise
@@ -82,17 +89,23 @@ class TestStudentBlockedFromCreateCourse:
     def setup_method(self):
         self._client = TestClient(app, raise_server_exceptions=False)
 
-    def test_student_cannot_create_course(self):
+    def test_given_student_when_creating_course_then_403_insufficient_permissions(self):
+        # Act
         r = self._client.post(
             "/",
             json={"title": "Test", "price": "0.00"},
             headers=_auth(1, "student"),
         )
+
+        # Assert
         assert r.status_code == 403
         assert r.json()["detail"]["error"] == "INSUFFICIENT_PERMISSIONS"
 
-    def test_no_token_returns_401(self):
+    def test_given_no_token_when_creating_course_then_401_missing_token(self):
+        # Act
         r = self._client.post("/", json={"title": "Test", "price": "0.00"})
+
+        # Assert
         assert r.status_code == 401
         assert r.json()["detail"]["error"] == "MISSING_TOKEN"
 
@@ -183,27 +196,48 @@ def published_course(db):
 
 
 class TestCreateAndGetCourse:
-    def test_teacher_creates_course_returns_201(self, client):
+    def test_given_teacher_when_creating_course_then_201_with_draft_status(
+        self, client
+    ):
+        # Act
         r = client.post(
             "/",
             json={"title": "Python Basics", "price": "500.00"},
             headers=_auth(10, "teacher"),
         )
+
+        # Assert
         assert r.status_code == 201
+
+        # Act
         data = r.json()
+
+        # Assert
         assert data["title"] == "Python Basics"
         assert data["status"] == "DRAFT"
         assert data["teacher_id"] == 10
 
-    def test_get_course_by_id(self, client, teacher_a_course):
+    def test_given_existing_course_when_fetched_by_id_then_course_returned(
+        self, client, teacher_a_course
+    ):
+        # Act
         r = client.get(f"/{teacher_a_course.id}", headers=_auth(10, "teacher"))
+
+        # Assert
         assert r.status_code == 200
+
+        # Act
         data = r.json()
+
+        # Assert
         assert data["id"] == teacher_a_course.id
         assert data["teacher_id"] == 10
 
-    def test_get_nonexistent_course_returns_404(self, client):
+    def test_given_unknown_course_when_fetched_then_404_course_not_found(self, client):
+        # Act
         r = client.get("/999999", headers=_auth(10, "teacher"))
+
+        # Assert
         assert r.status_code == 404
         assert r.json()["detail"]["error"] == "COURSE_NOT_FOUND"
 
@@ -214,21 +248,31 @@ class TestCreateAndGetCourse:
 
 
 class TestOwnershipEnforcement:
-    def test_teacher_b_cannot_update_teacher_a_course(self, client, teacher_a_course):
+    def test_given_other_teacher_when_updating_course_then_403_not_course_owner(
+        self, client, teacher_a_course
+    ):
+        # Act
         r = client.put(
             f"/{teacher_a_course.id}",
             json={"title": "Hijacked"},
             headers=_auth(99, "teacher"),  # teacher B
         )
+
+        # Assert
         assert r.status_code == 403
         assert r.json()["detail"]["error"] == "NOT_COURSE_OWNER"
 
-    def test_admin_can_update_any_course(self, client, teacher_a_course):
+    def test_given_admin_when_updating_any_course_then_update_succeeds(
+        self, client, teacher_a_course
+    ):
+        # Act
         r = client.put(
             f"/{teacher_a_course.id}",
             json={"title": "Admin Updated"},
             headers=_auth(1, "admin"),
         )
+
+        # Assert
         assert r.status_code == 200
         assert r.json()["title"] == "Admin Updated"
 
@@ -239,18 +283,24 @@ class TestOwnershipEnforcement:
 
 
 class TestPublishCourse:
-    def test_publish_requires_module_with_lesson(self, client, teacher_a_course):
+    def test_given_course_without_lesson_when_publishing_then_422_publish_requires_content(
+        self, client, teacher_a_course
+    ):
+        # Act
         r = client.put(
             f"/{teacher_a_course.id}",
             json={"status": "PUBLISHED"},
             headers=_auth(10, "teacher"),
         )
+
+        # Assert
         assert r.status_code == 422
         assert r.json()["detail"]["error"] == "PUBLISH_REQUIRES_CONTENT"
 
-    def test_publish_with_content_fires_rabbitmq_event(
+    def test_given_course_with_content_when_published_then_event_is_published(
         self, client, db, teacher_a_course
     ):
+        # Arrange
         module = Module(course_id=teacher_a_course.id, title="Mod 1", position=1)
         db.add(module)
         db.commit()
@@ -266,12 +316,15 @@ class TestPublishCourse:
         db.add(lesson)
         db.commit()
 
+        # Act
         with patch("router.publish_course_published") as mock_pub:
             r = client.put(
                 f"/{teacher_a_course.id}",
                 json={"status": "PUBLISHED"},
                 headers=_auth(10, "teacher"),
             )
+
+        # Assert
         assert r.status_code == 200
         assert r.json()["status"] == "PUBLISHED"
         mock_pub.assert_called_once_with(
@@ -290,30 +343,49 @@ class TestPublishCourse:
 
 
 class TestModuleAndLessonCRUD:
-    def test_create_module_returns_201(self, client, teacher_a_course):
+    def test_given_course_owner_when_creating_module_then_201(
+        self, client, teacher_a_course
+    ):
+        # Act
         r = client.post(
             f"/{teacher_a_course.id}/modules",
             json={"title": "Module 1", "order": 1},
             headers=_auth(10, "teacher"),
         )
+
+        # Assert
         assert r.status_code == 201
+
+        # Act
         data = r.json()
+
+        # Assert
         assert data["title"] == "Module 1"
         assert data["course_id"] == teacher_a_course.id
 
-    def test_create_lesson_returns_201(self, client, db, teacher_a_course):
+    def test_given_module_when_creating_lesson_then_201(
+        self, client, db, teacher_a_course
+    ):
+        # Arrange
         module = Module(course_id=teacher_a_course.id, title="Temp Module", position=0)
         db.add(module)
         db.commit()
         db.refresh(module)
 
+        # Act
         r = client.post(
             f"/{teacher_a_course.id}/modules/{module.id}/lessons",
             json={"title": "Lesson 1", "youtube_video_id": "dQw4w9WgXcQ", "order": 1},
             headers=_auth(10, "teacher"),
         )
+
+        # Assert
         assert r.status_code == 201
+
+        # Act
         data = r.json()
+
+        # Assert
         assert data["youtube_video_id"] == "dQw4w9WgXcQ"
         assert data["module_id"] == module.id
 
@@ -327,15 +399,27 @@ class TestModuleAndLessonCRUD:
 
 
 class TestStudentCourseBrowse:
-    def test_student_only_sees_published_courses(
+    def test_given_draft_and_published_courses_when_student_browses_then_only_published_are_returned(
         self, client, teacher_a_course, published_course
     ):
+        # Act
         r = client.get("/", headers=_auth(5, "student"))
+
+        # Assert
         assert r.status_code == 200
+
+        # Act
         ids = [c["id"] for c in r.json()["items"]]
+
+        # Assert
         assert published_course.id in ids
         assert teacher_a_course.id not in ids  # DRAFT — not visible
 
-    def test_student_cannot_get_draft_course_directly(self, client, teacher_a_course):
+    def test_given_draft_course_when_student_fetches_it_directly_then_404(
+        self, client, teacher_a_course
+    ):
+        # Act
         r = client.get(f"/{teacher_a_course.id}", headers=_auth(5, "student"))
+
+        # Assert
         assert r.status_code == 404
