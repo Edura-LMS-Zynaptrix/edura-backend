@@ -29,7 +29,13 @@ def publish_certificate_issued(
     try:
         connection = pika.BlockingConnection(
             pika.ConnectionParameters(
-                host=RABBITMQ_HOST, connection_attempts=3, retry_delay=2
+                host=RABBITMQ_HOST,
+                credentials=pika.PlainCredentials(
+                    os.getenv("RABBITMQ_USER", "guest"),
+                    os.getenv("RABBITMQ_PASSWORD", "guest"),
+                ),
+                connection_attempts=3,
+                retry_delay=2,
             )
         )
         channel = connection.channel()

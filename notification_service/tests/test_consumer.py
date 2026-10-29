@@ -271,6 +271,24 @@ def test_given_consumer_when_started_then_it_binds_the_notification_queue():
         mock_channel.start_consuming.assert_called_once()
 
 
+def test_given_rabbitmq_credentials_in_environment_when_consumer_starts_then_it_connects_with_them(
+    monkeypatch,
+):
+    # Arrange
+    monkeypatch.setenv("RABBITMQ_USER", "edura")
+    monkeypatch.setenv("RABBITMQ_PASSWORD", "s3cret")
+
+    # Act
+    with patch("pika.BlockingConnection") as mock_pika_conn:
+        from consumer import start_consumer
+
+        start_consumer()
+
+    # Assert
+    credentials = mock_pika_conn.call_args.args[0].credentials
+    assert (credentials.username, credentials.password) == ("edura", "s3cret")
+
+
 def test_given_progress_report_event_when_consumed_then_email_has_a_pdf_attached():
     # Arrange
     import base64
