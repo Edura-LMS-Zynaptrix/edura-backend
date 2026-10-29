@@ -202,7 +202,13 @@ def start_consumer():
         try:
             connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
-                    host=RABBITMQ_HOST, connection_attempts=10, retry_delay=3
+                    host=RABBITMQ_HOST,
+                    credentials=pika.PlainCredentials(
+                        os.getenv("RABBITMQ_USER", "guest"),
+                        os.getenv("RABBITMQ_PASSWORD", "guest"),
+                    ),
+                    connection_attempts=10,
+                    retry_delay=3,
                 )
             )
             channel = connection.channel()
