@@ -7,73 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Event-driven communication between services (ADR-12): every change is announced on the RabbitMQ topic exchange `edura.events`, and services keep read-only `replica_*` tables updated by their event consumers (`shared/events.py`, `shared/messaging.py`, `shared/replicas.py`)
+- `auth_service`: verification link email on registration (`auth.email-verification-requested`)
+- Test suites for every service: 778 test cases, named Given-When-Then with Arrange-Act-Assert markers (DDP-#67), plus a test for `GET /api/assessments/{id}/my-last-attempt`
+- CI: changed-lines coverage gate (80% on pull requests), build check, missing-tests failure, per-service `coverage-<service>` artifacts and a separate `Security Scan` job (DDP-#35)
+- CI: branch coverage, measured on production code only (test files and Alembic migrations excluded) (DDP-#63)
+- CI: combined coverage badge published from the `Coverage Badge` job
+- README: project structure, prerequisites, step-by-step local setup, test coverage table, CI description and API documentation links
+
 ### Changed
-- CI: workflow now also runs on pushes to `develop`, `main`, `feature/**`, `fix/**`, `hotfix/**` and `release/**`; adds a build check, a missing-tests failure, a changed-lines coverage gate (>= 80% on PRs), per-service `coverage-<service>` artifacts and a separate `Security Scan` job
-- `notification_service`: email is now sent through the Resend API (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`) instead of SMTP; the `SMTP_*` settings are removed
+- `notification_service`: email is sent through the Resend API (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`, sender `noreply@eduralms.com`) instead of SMTP; the `SMTP_*` settings are removed
+- Services no longer call one another over HTTP: access checks use local data kept current by `access.changed` events (the HTTP enrollment client of `content_service` is replaced)
+- CI workflow also runs on pushes to `develop`, `main`, `feature/**`, `fix/**`, `hotfix/**` and `release/**`
+- Docker images exclude `.env`; a push to `develop` triggers the staging deployment
+
+## [0.3.0] - 2026-10-15
 
 ### Added
-- `notification_service`: RabbitMQ consumer for OTP, payment, certificate, and violation email dispatch via SMTP (DDP-#20)
-  - `consumer.py` — RabbitMQ worker consuming from `notification.queue` bound to exchange `edura.events` for routing keys `auth.otp-requested`, `payment.success`, `certificate.issued`, and `proctoring.violation`.
-  - `email_service.py` & `templates/` — Jinja2 HTML email rendering and SMTP email dispatch for `otp_email.html`, `payment_confirm.html`, `cert_issued.html`, and `violation_alert.html`.
-  - Fault tolerance & persistence — catches SMTP errors gracefully, records delivery failures as `NotificationLog(status=FAILED, error_message=...)`, and nacks messages (`requeue=True`) without crashing the consumer.
-  - Test suite (`test_templates.py`, `test_consumer.py`, `test_email_service.py`) achieving 92% code coverage on `notification_service`.
-- `assessment_service`: timed quiz sessions, Redis caching, MCQ auto-grading, and anti-cheat tab-switch detection (DDP-#17)
-  - `POST /api/assessments/{id}/start` — initializes timed session in Redis (`session:assessment:{session_id}`) with TTL equal to assessment time limit, prevents duplicate active sessions (409 Conflict), and returns shuffled questions with answer key obfuscated.
-  - `POST /api/assessments/{id}/submit` — auto-grades MCQ and True/False questions, flags Short Answer for manual review, handles auto-submit on timer expiry, updates DB `Submission` record, and publishes `assessment.graded` event to RabbitMQ.
-  - `POST /api/assessments/{id}/violations` — logs tab-switch and focus-lost anti-cheat events into `ViolationLog` table, returning 204 No Content.
-  - `assessment_service/tests/test_assessment.py` — unit and integration test suite achieving 84% overall code coverage on `assessment_service`.
-- `enrollment_service`: consume `payment.success` RabbitMQ event and grant/revoke course access (DDP-#16)
-  - RabbitMQ Consumer (`consumer.py`) on queue `enrollment.queue` bound to exchange `edura.events`:
-    - Processes `payment.success` events to create or extend `ACTIVE` enrollments by 30 days and publishes `enrollment.activated` event.
-    - Processes `subscription.expired` events to update enrollment status to `SUSPENDED`.
-  - Endpoint `GET /api/enrollments` query endpoint returning enrollment status for external service access checks.
-  - Test suite (`tests/test_enrollment.py`) covering all acceptance criteria with 87% code coverage on `enrollment_service`.
-- `auth_service`: OAuth2 PKCE login, JWT management, Redis sessions, and OTP verification (DDP-#10)
-  - `POST /api/auth/login` — validates user credentials, issues 15-minute access token and 7-day HttpOnly refresh token cookie, tracks Redis session.
-  - `POST /api/auth/refresh` — refresh token rotation with reuse detection (`REFRESH_TOKEN_REUSE`).
-  - `POST /api/auth/otp/request` & `POST /api/auth/otp/verify` — 6-digit OTP generation with 5-minute (300s) TTL in Redis.
-  - `shared/auth.py` — finalized `require_role` decorator supporting FastAPI `Depends()` and direct call invocations.
-  - `auth_service/tests/test_auth_service.py` — unit and integration tests achieving 93% overall code coverage.
-- `content_service`: media delivery endpoints (DDP-#19)
-  - `POST /signed-url` — Cloudinary signed URL (1-hour expiry); students must be enrolled, teachers/admins unrestricted
-  - `GET /lessons/{lesson_id}/stream` — YouTube embed parameters (youtube-nocookie.com, rel=0, modestbranding=1); enrollment enforced for students
-  - `POST /upload` — file upload validation: size ≤ 25 MB, MIME whitelist (pdf/png/jpeg), python-magic byte-signature verification
-- `content_service/cloudinary_utils.py`: `get_signed_url(public_id)` wrapper using `cloudinary.utils.cloudinary_url` with `sign_url=True`
-- `content_service/enrollment_client.py`: async httpx client — calls `enrollment_service /enrollments` and checks `status == "active"`
-- `content_service/tests/test_content.py`: 20 tests covering all ACs (router 100% coverage)
-- `course_service`: full Course → Module → Lesson REST API (DDP-#17)
-  - `POST /` — teacher creates course (status: DRAFT)
-  - `GET /` — list courses; students see only PUBLISHED
-  - `GET /{course_id}` — get course detail
-  - `PUT /{course_id}` — update course; publishing requires ≥1 module with ≥1 lesson
-  - `DELETE /{course_id}` — teacher or admin deletes own course
-  - `POST /{course_id}/modules` — create module
-  - `GET /{course_id}/modules` — list modules ordered by position
-  - `POST /{course_id}/modules/{module_id}/lessons` — create lesson (youtube_video_id + cloudinary_asset_url)
-  - `GET /{course_id}/modules/{module_id}/lessons` — list lessons
-- `course_service/events.py`: `publish_course_published()` — publishes `course.published` event to RabbitMQ exchange `edura.events`
-- `course_service/router.py`: `assert_course_owner()` helper — teachers can only mutate their own courses; admin bypasses check
-- `course_service/alembic/versions/a1b2c3d4e5f6`: migration adding `status` ENUM (DRAFT/PUBLISHED/ARCHIVED) to courses and `youtube_video_id`, `cloudinary_asset_url` to lessons
-- `course_service/tests/test_courses.py`: 17 tests covering all ACs (91% coverage)
-- `shared/auth.py`: `require_role(roles)` dependency factory — validates Bearer JWT (HS256),
-  enforces role membership, raises structured 401/403 errors; importable by all 11 services
-- `user_service`: full REST API for user profile management
-  - `GET /` — admin paginated user list
-  - `GET /{user_id}` — own record or admin access
-  - `PUT /{user_id}` — update own profile or admin
-  - `PUT /{user_id}/role` — admin role assignment
-  - `DELETE /{user_id}` — admin soft-delete
-- `user_service/schemas.py`: Pydantic v2 request/response schemas
-- `user_service/database.py`: `get_db()` session dependency
-- `user_service/tests/test_auth.py`: unit tests for `require_role` (missing token, expired, wrong role, payload injection)
-- `user_service/tests/test_users.py`: integration tests for all user endpoints
+- `auth_service`: Google sign-in (`POST /api/auth/google`), password set, change and reset with notification emails, and email verification with a resend endpoint
+- `auth_service`: sign-up profile creation event and secure admin role assignment
+- `user_service`: student profile columns, `streams` and `grade_subjects` tables, internal user endpoints, referral system and wallet records
+- `course_service`, `payment_service`, `content_service`: public ID fields for course, lesson, payment and profile images and files; receipt upload
+- `enrollment_service`, `progress_service`: free enrolment and lesson progress tracking
+- `assessment_service`, `analytics_service`, `admin_service`: exam rankings, admin dashboard and analytics endpoints, payment service integration
+- Start-up event in every service that creates the database tables and sets up logging
 
-## [0.1.0] - Sprint 5 baseline
+## [0.2.0] - 2026-08-26
 
 ### Added
-- 11 FastAPI microservice skeletons with health endpoints
-- SQLAlchemy ORM models for all services (from SDS ER diagram)
-- Alembic migrations for all services
+- `auth_service`: login with a 15-minute access token and a 7-day HttpOnly refresh token cookie, refresh token rotation with reuse detection (`REFRESH_TOKEN_REUSE`), Redis sessions, and `POST /api/auth/otp/request` and `/otp/verify` (6-digit OTP, 5-minute Redis lifetime) (DDP-#10). The first version used Asgardeo OAuth2 PKCE; it was replaced in 0.3.0 by the Auth Service's own tokens and Google sign-in (ADR-12 and the final report)
+- `payment_service`: PayHere checkout initialisation, HMAC webhook handler and manual receipt upload (DDP-#15)
+- `enrollment_service`: consumes `payment.success` to create or extend `ACTIVE` enrollments by 30 days and publishes `enrollment.activated`; `subscription.expired` suspends the enrollment; `GET /api/enrollments` (DDP-#16)
+- `assessment_service`: timed quiz sessions in Redis, MCQ and True/False auto-grading, short answers flagged for manual review, tab-switch and focus-loss violation log, `assessment.graded` event (DDP-#17)
+- `progress_service`: lesson watch tracking, course completion, certificate eligibility and leaderboard (DDP-#19)
+- `notification_service`: RabbitMQ consumer for OTP, payment, certificate and violation emails with Jinja2 templates, failure log and requeue (DDP-#20)
+- CI: GitHub Actions pipeline with linting, format check and pytest
+
+### Changed
+- `python-jose` replaced by `PyJWT` and the FastAPI version pinned to a stable release in all services (dependency vulnerabilities)
+- All services formatted with Ruff and Black
+
+## [0.1.0] - 2026-07-11
+
+### Added
+- 11 FastAPI microservice skeletons with health endpoints, Dockerfiles and `create_tables.py`
+- SQLAlchemy ORM models for all services (from the SDS ER diagram), Alembic migrations and pytest smoke tests
 - Neon PostgreSQL integration (`pool_pre_ping`, SSL, per-service `.env` files)
 - Docker Compose stack (Redis, RabbitMQ, 11 services, Nginx)
-- GitHub Actions CI scaffold
+- `shared/auth.py`: `require_role(roles)` dependency validating the Bearer JWT (HS256), enforcing roles and returning structured 401 and 403 errors (DDP-#11)
+- `user_service`: user REST API (paginated list, own record or admin access, update, role assignment, soft delete) (DDP-#11)
+- `course_service`: Course, Module and Lesson REST API with `DRAFT`, `PUBLISHED` and `ARCHIVED` status; publishing requires at least one module with a lesson; `course.published` event; owner check for teachers (DDP-#13)
+- `content_service`: Cloudinary signed URLs (1-hour expiry), YouTube stream parameters (youtube-nocookie.com) and validated file upload (25 MB, PDF, PNG and JPEG with byte-signature check) (DDP-#14)
+
+[Unreleased]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v0.3.0...develop
+[0.3.0]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/releases/tag/v0.1.0
