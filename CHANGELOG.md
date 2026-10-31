@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-31
+
 ### Added
 - Event-driven communication between services (ADR-12): every change is announced on the RabbitMQ topic exchange `edura.events`, and services keep read-only `replica_*` tables updated by their event consumers (`shared/events.py`, `shared/messaging.py`, `shared/replicas.py`)
 - `auth_service`: verification link email on registration (`auth.email-verification-requested`)
@@ -21,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Services no longer call one another over HTTP: access checks use local data kept current by `access.changed` events (the HTTP enrollment client of `content_service` is replaced)
 - CI workflow also runs on pushes to `develop`, `main`, `feature/**`, `fix/**`, `hotfix/**` and `release/**`
 - Docker images exclude `.env`; a push to `develop` triggers the staging deployment
+
+### Fixed
+- `notification_service` and `progress_service`: the RabbitMQ consumers and the certificate publisher connect with `RABBITMQ_USER` and `RABBITMQ_PASSWORD` instead of the removed `guest` account, so staging emails and progress events work again (DDP-#79)
 
 ## [0.3.0] - 2026-10-15
 
@@ -60,7 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `course_service`: Course, Module and Lesson REST API with `DRAFT`, `PUBLISHED` and `ARCHIVED` status; publishing requires at least one module with a lesson; `course.published` event; owner check for teachers (DDP-#13)
 - `content_service`: Cloudinary signed URLs (1-hour expiry), YouTube stream parameters (youtube-nocookie.com) and validated file upload (25 MB, PDF, PNG and JPEG with byte-signature check) (DDP-#14)
 
-[Unreleased]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v0.3.0...develop
+[Unreleased]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v1.0.0...develop
+[1.0.0]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Edura-LMS-Zynaptrix/edura-backend/releases/tag/v0.1.0
