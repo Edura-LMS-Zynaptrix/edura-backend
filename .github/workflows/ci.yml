@@ -1,0 +1,217 @@
+name: Backend CI — Microservices Matrix
+
+on:
+  push:
+    branches: [ develop, main, 'feature/**', 'fix/**', 'hotfix/**', 'release/**' ]
+  pull_request:
+    branches: [ develop, main ]
+
+jobs:
+  verify-service:
+    name: Verify ${{ matrix.service }}
+    runs-on: ubuntu-latest
+
+    # This prevents GitHub from cancelling the other 10 services if 1 fails
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - auth_service
+          - user_service
+          - course_service
+          - content_service
+          - enrollment_service
+          - payment_service
+          - assessment_service
+          - progress_service
+          - notification_service
+          - analytics_service
+          - admin_service
+
+    # Isolated test databases for the migration (integration) tests
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Backend Repo
+        uses: actions/checkout@v4
+        with:
+          # diff-cover needs the base branch to find the lines a PR changed
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Base Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black pytest pytest-cov httpx diff-cover
+
+      - name: Install ${{ matrix.service }} Dependencies
+        run: |
+          if [ -f "${{ matrix.service }}/requirements.txt" ]; then
+            pip install -r ${{ matrix.service }}/requirements.txt
+          fi
+
+      # --- Lint & Format ---
+      - name: Run Ruff
+        run: ruff check ${{ matrix.service }}/
+
+      - name: Run Black
+        run: black --check ${{ matrix.service }}/
+
+      # --- Build ---
+      - name: Build check (byte-compile)
+        run: python -m compileall -q ${{ matrix.service }}
+
+      - name: Build check (Docker image)
+        run: |
+          if [ -f "${{ matrix.service }}/Dockerfile" ]; then
+            docker build -f ${{ matrix.service }}/Dockerfile -t edura-${{ matrix.service }}:ci .
+          fi
+
+      # --- Tests (unit + integration; Postgres/Redis service containers above) ---
+      - name: Create Test Database
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_db -c "CREATE DATABASE test_db_${{ matrix.service }};" || true
+
+      - name: Run Tests
+        env:
+          REDIS_HOST: localhost
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db_${{ matrix.service }}
+          PYTHONPATH: .:${{ matrix.service }}
+        run: |
+          if [ ! -d "${{ matrix.service }}/tests" ]; then
+            echo "::error::No tests folder found for ${{ matrix.service }}"
+            exit 1
+          fi
+          pytest ${{ matrix.service }} \
+            --cov=${{ matrix.service }} --cov-branch --cov-report=xml:coverage.xml --cov-report=term
+
+      # Guideline 6.4 / 8.2: coverage on NEW code must be >= 80%
+      - name: Coverage gate (changed lines >= 80%)
+        if: github.event_name == 'pull_request' && hashFiles('coverage.xml') != ''
+        run: |
+          diff-cover coverage.xml \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=80 \
+            --markdown-report=diff-coverage.md
+          cat diff-coverage.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service }}
+          path: coverage.xml
+
+  # Coverage badge: after a push to develop, combine the coverage of all services
+  # and write it as a shields.io endpoint file on the "badges" branch. The README
+  # badge reads that file, so no external coverage service is needed.
+  coverage-badge:
+    name: Coverage Badge
+    needs: verify-service
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # lets this job push coverage.json to the badges branch
+    steps:
+      - name: Checkout Backend Repo
+        uses: actions/checkout@v4
+
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage
+
+      - name: Calculate combined line coverage
+        id: cov
+        run: |
+          python - <<'PY'
+          import glob, os
+          import xml.etree.ElementTree as ET
+
+          valid = covered = 0
+          files = sorted(glob.glob("coverage/*/coverage.xml"))
+          for path in files:
+              root = ET.parse(path).getroot()
+              valid += int(root.get("lines-valid"))
+              covered += int(root.get("lines-covered"))
+          pct = round(covered * 100 / valid) if valid else 0
+          print(f"{len(files)} services, {covered}/{valid} lines covered = {pct}%")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"pct={pct}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(f"Combined line coverage ({len(files)} services): {pct}%\n")
+          PY
+
+      - name: Publish coverage badge
+        env:
+          PCT: ${{ steps.cov.outputs.pct }}
+        run: |
+          if [ "$PCT" -ge 80 ]; then color=brightgreen; elif [ "$PCT" -ge 60 ]; then color=yellow; else color=red; fi
+          echo "{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${PCT}%\",\"color\":\"${color}\"}" > "$RUNNER_TEMP/coverage.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin badges > /dev/null; then
+            git fetch origin badges
+            git checkout -B badges origin/badges
+          else
+            git checkout --orphan badges
+            git rm -rf . > /dev/null
+          fi
+          cp "$RUNNER_TEMP/coverage.json" coverage.json
+          git add coverage.json
+          git diff --cached --quiet || git commit -m "chore(badges): update coverage badge to ${PCT}%"
+          git push origin badges
+
+  # Guideline 7.2: dependency vulnerability scan
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Backend Repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit dependencies of every service
+        run: |
+          status=0
+          for req in */requirements.txt; do
+            echo "::group::pip-audit $req"
+            pip-audit -r "$req" || status=1
+            echo "::endgroup::"
+          done
+          exit $status

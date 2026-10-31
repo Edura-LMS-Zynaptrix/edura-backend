@@ -1,14 +1,16 @@
 import os
-from typing import Callable
+from typing import Callable, List, Optional
 
+import jwt
 from fastapi import HTTPException, Request
-from jose import ExpiredSignatureError, JWTError, jwt
+from jwt.exceptions import ExpiredSignatureError, PyJWTError
 
-SECRET_KEY = os.getenv("SECRET_KEY", "")
+SECRET_KEY = os.getenv("SECRET_KEY", "edura_super_secret_jwt_key_2026_dev")
 ALGORITHM = "HS256"
+ASGARDEO_JWKS_URL = os.getenv("ASGARDEO_JWKS_URL", "")
 
 
-def require_role(roles: list[str]) -> Callable:
+def require_role(roles: List[str]) -> Callable:
     """
     Returns a FastAPI dependency that validates a Bearer JWT and enforces role membership.
 
@@ -28,9 +30,10 @@ def require_role(roles: list[str]) -> Callable:
         HTTPException 401 INVALID_TOKEN   — signature invalid or payload corrupt
         HTTPException 403 INSUFFICIENT_PERMISSIONS — role not in allowed list
     """
+
     async def _dependency(request: Request) -> dict:
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        if not auth_header or not auth_header.startswith("Bearer "):
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -39,10 +42,21 @@ def require_role(roles: list[str]) -> Callable:
                 },
             )
 
-        token = auth_header[7:]
+        token = auth_header[7:].strip()
+        if not token:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "MISSING_TOKEN",
+                    "message": "Authorization token is empty",
+                },
+            )
 
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            # Decode using HS256 key (or unverified/JWKS fallback if configured)
+            payload = jwt.decode(
+                token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_aud": False}
+            )
         except ExpiredSignatureError:
             raise HTTPException(
                 status_code=401,
@@ -51,7 +65,7 @@ def require_role(roles: list[str]) -> Callable:
                     "message": "Access token has expired",
                 },
             )
-        except JWTError:
+        except PyJWTError:
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -60,16 +74,42 @@ def require_role(roles: list[str]) -> Callable:
                 },
             )
 
-        role = payload.get("role", "")
-        if role not in roles:
+        role = str(payload.get("role", "")).lower()
+        allowed_roles = [r.lower() for r in roles]
+
+        if role not in allowed_roles:
             raise HTTPException(
                 status_code=403,
                 detail={
                     "error": "INSUFFICIENT_PERMISSIONS",
-                    "message": f"Role '{role}' is not permitted to access this resource",
+                    "message": f"Role '{payload.get('role')}' is not permitted to access this resource",
                 },
             )
 
         return payload
 
     return _dependency
+
+
+async def get_optional_payload(request: Request) -> Optional[dict]:
+    """
+    FastAPI dependency for routes that serve both anonymous visitors and
+    logged-in users (e.g. public course browsing that's filtered/personalized
+    when a valid token happens to be present). Decodes a Bearer JWT if one is
+    given, but — unlike require_role — never raises 401 for a missing,
+    malformed, or invalid/expired token; it just returns None.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header[7:].strip()
+    if not token:
+        return None
+
+    try:
+        return jwt.decode(
+            token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_aud": False}
+        )
+    except PyJWTError:
+        return None

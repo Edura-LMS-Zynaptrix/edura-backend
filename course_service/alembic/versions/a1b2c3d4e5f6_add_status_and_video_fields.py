@@ -5,6 +5,7 @@ Revises: cdc605ff547e
 Create Date: 2026-06-28
 
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -33,8 +34,13 @@ def upgrade() -> None:
     # Backfill: rows published before this migration
     op.execute("UPDATE courses SET status = 'PUBLISHED' WHERE is_published = TRUE")
 
-    op.add_column("lessons", sa.Column("youtube_video_id", sa.String(length=255), nullable=True))
-    op.add_column("lessons", sa.Column("cloudinary_asset_url", sa.String(length=512), nullable=True))
+    op.add_column(
+        "lessons", sa.Column("youtube_video_id", sa.String(length=255), nullable=True)
+    )
+    op.add_column(
+        "lessons",
+        sa.Column("cloudinary_asset_url", sa.String(length=512), nullable=True),
+    )
 
 
 def downgrade() -> None:

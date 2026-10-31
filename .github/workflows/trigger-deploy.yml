@@ -1,0 +1,26 @@
+name: Trigger deploy
+
+# After a merge, ask edura-infra to build and deploy this commit (DDP-#18):
+# develop → staging, main → production (waits for approval in edura-infra).
+# Production is skipped until the org variable ENABLE_PRODUCTION is 'true'.
+on:
+  push:
+    branches: [ develop, main ]
+
+jobs:
+  trigger:
+    name: Start edura-infra deploy
+    if: github.ref_name == 'develop' || vars.ENABLE_PRODUCTION == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deploy.yml
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then target=production; else target=staging; fi
+          gh workflow run deploy.yml \
+            --repo "${{ github.repository_owner }}/edura-infra" \
+            --ref "$GITHUB_REF_NAME" \
+            -f environment="$target" \
+            -f source_branch="$GITHUB_REF_NAME"
+          echo "Started $target deploy of ${GITHUB_SHA::7}: https://github.com/${{ github.repository_owner }}/edura-infra/actions/workflows/deploy.yml" >> "$GITHUB_STEP_SUMMARY"

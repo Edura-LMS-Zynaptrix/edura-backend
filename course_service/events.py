@@ -1,28 +1,65 @@
-import json
-import logging
-import os
+"""Course events. Every change to the catalogue is announced, so other services keep their own copy."""
 
-import pika
+from models import Course, Module
 
-logger = logging.getLogger(__name__)
+from shared import events as ev
+from shared.messaging import publish
 
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
-EXCHANGE = "edura.events"
+
+def _value(x):
+    return x.value if hasattr(x, "value") else x
+
+
+def course_event(course: Course) -> dict:
+    return {
+        "id": course.id,
+        "title": course.title,
+        "grade": course.grade,
+        "stream_ids": course.stream_ids or [],
+        "course_type": _value(course.course_type),
+        "status": _value(course.status),
+        "price": float(course.price or 0),
+        "instructor_id": course.instructor_id,
+        "thumbnail_url": course.thumbnail_url,
+    }
+
+
+def module_event(module: Module) -> dict:
+    return {
+        "id": module.id,
+        "course_id": module.course_id,
+        "title": module.title,
+        "position": module.position,
+        "is_active": module.is_active,
+    }
+
+
+def announce_course(course: Course) -> None:
+    publish(ev.COURSE_UPSERTED, course_event(course))
+
+
+def announce_course_deleted(course_id: int) -> None:
+    publish(ev.COURSE_DELETED, {"id": course_id})
+
+
+def announce_module(module: Module) -> None:
+    publish(ev.COURSE_MODULE_UPSERTED, module_event(module))
+
+
+def announce_module_deleted(module_id: int) -> None:
+    publish(ev.COURSE_MODULE_DELETED, {"id": module_id})
 
 
 def publish_course_published(course_id: int, teacher_id: int, title: str) -> None:
-    payload = json.dumps({"course_id": course_id, "teacher_id": teacher_id, "title": title})
-    try:
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
-        channel = connection.channel()
-        channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
-        channel.basic_publish(
-            exchange=EXCHANGE,
-            routing_key="course.published",
-            body=payload,
-            properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"),
-        )
-        connection.close()
-        logger.info("Published course.published event for course_id=%s", course_id)
-    except Exception as exc:
-        logger.error("Failed to publish course.published event: %s", exc)
+    publish(
+        ev.COURSE_PUBLISHED,
+        {"course_id": course_id, "teacher_id": teacher_id, "title": title},
+    )
+
+
+def announce_everything(db) -> None:
+    """Re-announce every course and lesson so a service with an empty copy catches up."""
+    for course in db.query(Course).all():
+        announce_course(course)
+    for module in db.query(Module).all():
+        announce_module(module)

@@ -1,15 +1,25 @@
+import logging
+
+from database import Base, engine
 from fastapi import FastAPI
 from router import router
 
-app = FastAPI(
-    title="Notification Service"
-)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Notification Service")
 
 app.include_router(router)
 
+
+@app.on_event("startup")
+def on_startup():
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Notification service database tables verified.")
+    except Exception as e:
+        logger.error(f"Error initializing DB tables on startup: {e}")
+
+
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "service": "notification_service"
-    }
+    return {"status": "ok", "service": "notification_service"}

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Certificate Issued - Edura</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .header { text-align: center; border-bottom: 2px solid #8b5cf6; padding-bottom: 15px; margin-bottom: 20px; }
+        .header h1 { color: #8b5cf6; margin: 0; font-size: 24px; }
+        .btn { display: inline-block; background-color: #8b5cf6; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; margin-top: 15px; }
+        .footer { margin-top: 30px; font-size: 12px; color: #6b7280; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Congratulations!</h1>
+        </div>
+        <p>Dear {{ student_name | default("Student") }},</p>
+        <p>Congratulations on completing your course <strong>{{ course_title }}</strong>! Your certificate of completion has been issued on {{ issued_at | default("recently") }}.</p>
+        <p>You can view and download your verified certificate below:</p>
+        <div style="text-align: center;">
+            <a href="{{ download_url | default('#') }}" class="btn">View Certificate</a>
+        </div>
+        <div class="footer">
+            &copy; Edura Learning Platform. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

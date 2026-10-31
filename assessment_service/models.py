@@ -8,26 +8,32 @@ Matches ER diagram:
 - exam entity: timed assessment
 - quiz_habits / participate: tracked via Submission and ViolationLog
 """
+
 import enum
 
+from database import Base  # shared Base from database.py
 from sqlalchemy import Boolean, DateTime, Enum, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from database import Base  # shared Base from database.py
-
+from shared.replicas import (
+    define_replica_access,
+    define_replica_course,
+    define_replica_user,
+)
 
 # ---------------------------------------------------------------------------
 # ENUMs
 # ---------------------------------------------------------------------------
 
+
 class AssessmentType(str, enum.Enum):
-    quiz = "quiz"       # Short practice quiz (matches ER diagram: quiz entity)
-    exam = "exam"       # Full timed exam  (matches ER diagram: exam entity)
+    quiz = "quiz"  # Short practice quiz (matches ER diagram: quiz entity)
+    exam = "exam"  # Full timed exam  (matches ER diagram: exam entity)
 
 
 class QuestionType(str, enum.Enum):
-    mcq = "mcq"                     # Multiple-choice question
+    mcq = "mcq"  # Multiple-choice question
     true_false = "true_false"
     short_answer = "short_answer"
 
@@ -50,21 +56,33 @@ class ViolationType(str, enum.Enum):
 # Models
 # ---------------------------------------------------------------------------
 
+
 class Assessment(Base):
     """
     Represents a quiz or exam for a course.
     Matches ER diagram: quiz entity (ID, type, password) and exam entity.
     quiz_password allows teacher to restrict access (matches ER: password attribute on quiz).
     """
+
     __tablename__ = "assessments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    course_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    lesson_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    course_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # course_service Module id — the "lesson" an exam-course exam sits in.
+    module_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lesson_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    image_public_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scheduled_start: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     assessment_type: Mapped[AssessmentType] = mapped_column(
-        Enum(AssessmentType, name="assessmenttype"), nullable=False, default=AssessmentType.quiz
+        Enum(AssessmentType, name="assessmenttype"),
+        nullable=False,
+        default=AssessmentType.quiz,
     )
     quiz_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     time_limit_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -75,11 +93,16 @@ class Assessment(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     __table_args__ = (
         Index("ix_assessments_course_id", "course_id"),
+        Index("ix_assessments_module_id", "module_id"),
+        Index("ix_assessments_lesson_id", "lesson_id"),
     )
 
 
@@ -89,28 +112,40 @@ class Question(Base):
     options_json stores MCQ choices as a JSON string (e.g. '["A","B","C","D"]').
     correct_answer stores the correct answer text or index.
     """
+
     __tablename__ = "questions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    assessment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    assessment_id: Mapped[int] = mapped_column(Integer, nullable=False)
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
     question_type: Mapped[QuestionType] = mapped_column(
-        Enum(QuestionType, name="questiontype"), nullable=False, default=QuestionType.mcq
+        Enum(QuestionType, name="questiontype"),
+        nullable=False,
+        default=QuestionType.mcq,
     )
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
     correct_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    # Shown to the student in the post-submission review.
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    question_image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    question_image_public_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    # JSON list aligned index-for-index with options_json: {"url", "public_id"} or null.
+    option_images_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     marks: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
-    __table_args__ = (
-        Index("ix_questions_assessment_id", "assessment_id"),
-    )
+    __table_args__ = (Index("ix_questions_assessment_id", "assessment_id"),)
 
 
 class Submission(Base):
@@ -119,11 +154,12 @@ class Submission(Base):
     Matches ER diagram: participate / quiz_habits entity — tracks student engagement.
     answers_json stores student answers as a JSON string keyed by question_id.
     """
+
     __tablename__ = "submissions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    assessment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    assessment_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[SubmissionStatus] = mapped_column(
         Enum(SubmissionStatus, name="submissionstatus"),
         nullable=False,
@@ -134,12 +170,17 @@ class Submission(Base):
     started_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    submitted_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     __table_args__ = (
@@ -154,11 +195,12 @@ class ViolationLog(Base):
     Anti-cheating event log for a student's exam submission.
     Records tab switching, copy-paste, camera detection events.
     """
+
     __tablename__ = "violation_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    submission_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    student_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    submission_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
     violation_type: Mapped[ViolationType] = mapped_column(
         Enum(ViolationType, name="violationtype"), nullable=False
     )
@@ -170,10 +212,56 @@ class ViolationLog(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     __table_args__ = (
         Index("ix_violation_logs_submission_id", "submission_id"),
         Index("ix_violation_logs_student_id", "student_id"),
     )
+
+
+class Badge(Base):
+    """An earnable achievement. Seeded at startup from badges.BADGE_DEFINITIONS."""
+
+    __tablename__ = "badges"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    criteria_key: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    category: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # activity | performance | milestone
+    icon_name: Mapped[str] = mapped_column(String(50), nullable=False)  # lucide icon
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class UserBadge(Base):
+    """A badge a student has earned (student_id is an auth_service user id)."""
+
+    __tablename__ = "user_badges"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    student_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    badge_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    awarded_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_user_badges_student_id", "student_id"),
+        Index("uq_user_badges_student_badge", "student_id", "badge_id", unique=True),
+    )
+
+
+# Copies of what other services announced: who can open what, the catalogue (owner
+# and titles) and people (names for leaderboards). Written only by the event consumer.
+ReplicaAccess = define_replica_access(Base)
+ReplicaCourse = define_replica_course(Base)
+ReplicaUser = define_replica_user(Base)
